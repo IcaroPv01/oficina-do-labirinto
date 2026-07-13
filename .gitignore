@@ -11,6 +11,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.tsbuildinfo
 build/
 dist/
 
@@ -45,4 +46,3 @@ Thumbs.db
 .env
 .env.*
 !.env.example
-

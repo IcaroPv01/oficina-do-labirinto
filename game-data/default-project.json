@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "oficina-labirinto",
+  "name": "Oficina do Labirinto",
+  "seed": "primeira-expedicao",
+  "player": {
+    "color": "#8aa2ff",
+    "accentColor": "#ffd166",
+    "skinDataUrl": null,
+    "maxHealth": 6,
+    "speed": 220,
+    "radius": 18,
+    "fireCooldownSeconds": 0.24,
+    "projectileSpeed": 500
+  },
+  "enemy": {
+    "name": "Sentinela",
+    "color": "#ff6b7a",
+    "maxHealth": 3,
+    "speed": 72,
+    "radius": 18,
+    "spawnCount": 4,
+    "contactDamage": 1,
+    "dropChance": 0.35
+  },
+  "world": {
+    "width": 960,
+    "height": 576,
+    "wallThickness": 32,
+    "backgroundColor": "#10131c",
+    "floorColor": "#182136",
+    "wallColor": "#40517d"
+  }
+}

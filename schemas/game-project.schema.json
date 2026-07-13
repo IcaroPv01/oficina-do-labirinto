@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/game-project-v1.json",
+  "title": "GameProject v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "name", "seed", "player", "enemy", "world"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,47}$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "seed": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "player": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["color", "accentColor", "skinDataUrl", "maxHealth", "speed", "radius", "fireCooldownSeconds", "projectileSpeed"],
+      "properties": {
+        "color": { "$ref": "#/$defs/color" },
+        "accentColor": { "$ref": "#/$defs/color" },
+        "skinDataUrl": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^data:image/png;base64," }] },
+        "maxHealth": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "speed": { "type": "number", "minimum": 60, "maximum": 500 },
+        "radius": { "type": "integer", "minimum": 8, "maximum": 32 },
+        "fireCooldownSeconds": { "type": "number", "minimum": 0.08, "maximum": 2 },
+        "projectileSpeed": { "type": "number", "minimum": 120, "maximum": 900 }
+      }
+    },
+    "enemy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "color", "maxHealth", "speed", "radius", "spawnCount", "contactDamage", "dropChance"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "color": { "$ref": "#/$defs/color" },
+        "maxHealth": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "speed": { "type": "number", "minimum": 10, "maximum": 300 },
+        "radius": { "type": "integer", "minimum": 8, "maximum": 40 },
+        "spawnCount": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "contactDamage": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "dropChance": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "world": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "wallThickness", "backgroundColor", "floorColor", "wallColor"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 640, "maximum": 1920 },
+        "height": { "type": "integer", "minimum": 360, "maximum": 1080 },
+        "wallThickness": { "type": "integer", "minimum": 16, "maximum": 96 },
+        "backgroundColor": { "$ref": "#/$defs/color" },
+        "floorColor": { "$ref": "#/$defs/color" },
+        "wallColor": { "$ref": "#/$defs/color" }
+      }
+    }
+  },
+  "$defs": {
+    "color": {
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{6}$"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "Oficina do Labirinto",
+  "short_name": "Labirinto",
+  "description": "Editor e jogo roguelike colaborativo executados no navegador.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0b0e15",
+  "theme_color": "#10131c",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
+

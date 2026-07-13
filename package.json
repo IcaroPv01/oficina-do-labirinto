@@ -1,0 +1,21 @@
+{
+  "name": "collaborative-roguelike",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "web"
+  ],
+  "scripts": {
+    "dev": "npm --workspace web run dev",
+    "build": "npm --workspace web run build",
+    "preview": "npm --workspace web run preview",
+    "test": "npm --workspace web run test",
+    "test:run": "npm --workspace web run test:run",
+    "test:e2e": "npm --workspace web run test:e2e",
+    "typecheck": "npm --workspace web run typecheck",
+    "check": "npm run typecheck && npm run test:run && npm run build"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}
