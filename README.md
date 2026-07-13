@@ -21,8 +21,9 @@ O servidor Flask legado não deve ser exposto na rede. Ele contém endpoints sem
 autenticação, operações de arquivo e execução de processos locais.
 
 Assets legados e checkouts de terceiros permanecem fora do histórico Git até a
-conclusão da auditoria de licença e proveniência. O repositório deve permanecer
-privado até que uma licença do projeto seja escolhida.
+conclusão da auditoria de licença e proveniência. O código original deste
+repositório é distribuído sob a licença MIT; componentes de terceiros mantêm
+suas próprias licenças e avisos.
 
 ## Meta de colaboração
 
@@ -76,3 +77,9 @@ Consulte [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) para a arquitetura-alvo e
 orienta a reconstrução. O fluxo de duas pessoas está em
 [docs/COLLABORATION.md](docs/COLLABORATION.md) e as restrições de segurança em
 [docs/SECURITY.md](docs/SECURITY.md).
+
+## Licença
+
+O código original está disponível sob a [licença MIT](LICENSE). Consulte
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) para componentes de terceiros.
+Assets legados ignorados pelo Git não são concedidos por esta licença.

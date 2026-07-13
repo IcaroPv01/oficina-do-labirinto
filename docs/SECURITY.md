@@ -21,6 +21,7 @@ para uso remoto.
 
 ## Relato de vulnerabilidade
 
-Enquanto o repositório for privado, vulnerabilidades devem ser comunicadas
-diretamente aos colaboradores e corrigidas em branch privada. Antes de abrir o
-projeto ao público, este documento deve receber um canal de contato definitivo.
+Use a opção **Security → Report a vulnerability** do repositório para enviar um
+relato privado. Não publique detalhes sensíveis em issues; se o formulário
+privado estiver indisponível, abra apenas um pedido de contato sem incluir a
+falha ou dados de exploração.
