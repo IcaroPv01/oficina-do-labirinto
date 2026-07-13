@@ -8,8 +8,8 @@
   "properties": {
     "schemaVersion": { "const": 1 },
     "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,47}$" },
-    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
-    "seed": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "\\S" },
+    "seed": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "\\S" },
     "player": {
       "type": "object",
       "additionalProperties": false,
@@ -17,7 +17,27 @@
       "properties": {
         "color": { "$ref": "#/$defs/color" },
         "accentColor": { "$ref": "#/$defs/color" },
-        "skinDataUrl": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^data:image/png;base64," }] },
+        "skinDataUrl": { "anyOf": [{ "type": "null" }, { "type": "string", "maxLength": 3000000, "pattern": "^data:image/png;base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$" }] },
+        "skinMetadata": {
+          "default": null,
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["filename", "width", "height", "bytes", "sha256", "origin", "license"],
+              "properties": {
+                "filename": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "\\S" },
+                "width": { "type": "integer", "minimum": 8, "maximum": 512 },
+                "height": { "type": "integer", "minimum": 8, "maximum": 512 },
+                "bytes": { "type": "integer", "minimum": 1, "maximum": 2097152 },
+                "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "origin": { "const": "user-upload" },
+                "license": { "enum": ["unverified", "original", "cc0", "cc-by", "cc-by-sa"] }
+              }
+            }
+          ]
+        },
         "maxHealth": { "type": "integer", "minimum": 1, "maximum": 20 },
         "speed": { "type": "number", "minimum": 60, "maximum": 500 },
         "radius": { "type": "integer", "minimum": 8, "maximum": 32 },
@@ -30,7 +50,7 @@
       "additionalProperties": false,
       "required": ["name", "color", "maxHealth", "speed", "radius", "spawnCount", "contactDamage", "dropChance"],
       "properties": {
-        "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 40, "pattern": "\\S" },
         "color": { "$ref": "#/$defs/color" },
         "maxHealth": { "type": "integer", "minimum": 1, "maximum": 50 },
         "speed": { "type": "number", "minimum": 10, "maximum": 300 },
@@ -38,6 +58,20 @@
         "spawnCount": { "type": "integer", "minimum": 1, "maximum": 20 },
         "contactDamage": { "type": "integer", "minimum": 1, "maximum": 10 },
         "dropChance": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "run": {
+      "type": "object",
+      "default": { "endless": false, "floorLimit": 3, "roomsPerFloor": 9, "startingCoins": 0, "startingKeys": 1, "shopHeartCost": 3 },
+      "additionalProperties": false,
+      "required": ["endless", "floorLimit", "roomsPerFloor", "startingCoins", "startingKeys", "shopHeartCost"],
+      "properties": {
+        "endless": { "type": "boolean" },
+        "floorLimit": { "type": "integer", "minimum": 1, "maximum": 99 },
+        "roomsPerFloor": { "type": "integer", "minimum": 5, "maximum": 24 },
+        "startingCoins": { "type": "integer", "minimum": 0, "maximum": 99 },
+        "startingKeys": { "type": "integer", "minimum": 1, "maximum": 9 },
+        "shopHeartCost": { "type": "integer", "minimum": 1, "maximum": 99 }
       }
     },
     "world": {
@@ -54,6 +88,25 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "player": {
+            "properties": { "skinMetadata": { "type": "object" } },
+            "required": ["skinMetadata"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "player": {
+            "properties": { "skinDataUrl": { "type": "string" } }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "color": {
       "type": "string",

@@ -6,6 +6,10 @@
 - Não inclui tokens ou segredos no bundle.
 - Importações são tratadas como dados não confiáveis e validadas antes do uso.
 - Uploads aceitam apenas formatos e tamanhos explicitamente permitidos.
+- PNGs passam por assinatura, estrutura de blocos, CRC, dimensões, limite de
+  pixels, decodificação e SHA-256; APNG não é aceito.
+- `.gamepack` importado repete a validação da skin antes de substituir o estado
+  válido, inclusive no comando que aplica conteúdo ao repositório.
 - HTML fornecido pelo projeto nunca é inserido com `innerHTML`.
 
 ## Protótipo legado
@@ -20,4 +24,3 @@ para uso remoto.
 Enquanto o repositório for privado, vulnerabilidades devem ser comunicadas
 diretamente aos colaboradores e corrigidas em branch privada. Antes de abrir o
 projeto ao público, este documento deve receber um canal de contato definitivo.
-

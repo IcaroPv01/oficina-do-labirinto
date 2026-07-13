@@ -1,17 +1,14 @@
 import { defineConfig } from "vite";
 
-const repositoryName = process.env.GITHUB_REPOSITORY?.split("/")[1];
-const base =
-  process.env.GITHUB_ACTIONS === "true" && repositoryName
-    ? `/${repositoryName}/`
-    : "/";
+import { resolveSiteBase } from "./scripts/resolve-site-base";
 
 export default defineConfig({
-  base,
+  base: resolveSiteBase(process.env),
   build: {
     outDir: "dist",
     assetsDir: "assets",
-    sourcemap: true,
+    target: "es2020",
+    sourcemap: false,
   },
   server: {
     host: "127.0.0.1",
@@ -22,4 +19,3 @@ export default defineConfig({
     port: 4173,
   },
 });
-

@@ -7,9 +7,9 @@ publicáveis no GitHub Pages e utilizáveis em computadores modestos.
 
 - `src/`, `main_script.py` e `JogoMedieval.spec` contêm o protótipo legado em
   Python/Pygame recuperado do Antigravity.
-- `web/` será o produto principal: Phaser 4, TypeScript e Vite.
-- `game-data/` conterá conteúdo versionado e validado.
-- `schemas/` conterá os contratos dos arquivos de projeto.
+- `web/` é o produto principal: Phaser 4, TypeScript e Vite.
+- `game-data/` contém o conteúdo versionado e validado.
+- `schemas/` contém os contratos dos arquivos de projeto.
 - `docs/` registra arquitetura, decisões e critérios de aceite.
 
 O Flask, o launcher Tkinter e o executável PyInstaller não fazem parte da
@@ -52,13 +52,24 @@ npm run test:e2e
 
 O build estático é produzido em `web/dist/`.
 
+Para transformar um `.gamepack` exportado pelo editor no conteúdo padrão que o
+próximo build publicará:
+
+```powershell
+npm run content:apply -- C:\caminho\projeto.gamepack
+```
+
 ## Gate atual
 
-A primeira vertical slice já inclui simulação determinística, movimento, tiro,
-inimigos, dano, drops, sala limpa, preview Phaser, autosave, undo/redo, upload
-de skin e importação/exportação `.gamepack`. Dungeon completa, loja, chefe e
-progressão entre andares permanecem no próximo gate; o protótipo legado não é
-considerado implementação desses recursos.
+O MVP web já inclui simulação determinística em passo fixo, dungeon multi-sala,
+movimento e tiro independentes, inimigos, dano, drops, portas, tesouro, loja,
+chefe, moedas, chaves, progressão entre andares, vitória e modo sem fim. O
+editor oferece preview Phaser, mapa navegável, configuração da expedição,
+autosave, undo/redo, upload PNG validado e importação/exportação `.gamepack`.
+
+O próximo gate amplia a edição visual de conteúdo: múltiplos arquétipos de
+inimigo, itens, salas desenhadas pelo usuário, áudio e migrações de schema. O
+protótipo legado permanece apenas como referência.
 
 Consulte [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) para a arquitetura-alvo e
 [docs/ANTIGRAVITY_CONTEXT.md](docs/ANTIGRAVITY_CONTEXT.md) para o histórico que

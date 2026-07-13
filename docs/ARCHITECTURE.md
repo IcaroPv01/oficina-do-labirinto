@@ -19,7 +19,7 @@ web/
   src/game/             cenas e renderização Phaser
   src/editor/           editor e preview
   src/storage/          autosave e import/export
-tests/                  testes de integração e navegador
+web/tests/              testes de integração e navegador
 .github/workflows/      validação e deploy
 src/                    protótipo Python legado temporário
 ```
@@ -33,6 +33,10 @@ versionado. A sincronização entre colaboradores ocorre por branches e pull
 requests.
 
 ## Gates
+
+Estado em 13/07/2026: Gates 1 e 2 concluídos; Gate 3 entregue no escopo inicial
+de projeto, histórico e publicação. A expansão do catálogo de conteúdo ainda é
+trabalho futuro.
 
 ### Gate 1 — vertical slice
 
@@ -61,3 +65,7 @@ requests.
 - validação em pull requests;
 - deploy somente após todos os checks passarem.
 
+Entregue agora: importação/exportação, autosave, schema v1, undo/redo, skin com
+hash e licença, parâmetros da expedição, mapa, validação de PR e deploy
+condicionado ao E2E. Pendente: migrações futuras e edição visual de catálogos
+de entidades, itens e geometria das salas.

@@ -1,3 +1,5 @@
+import type { RunAction, RunDirection } from "../core";
+import type { GamePreviewAnnouncementTone } from "./contracts";
 import type { PreviewRenderModel } from "./renderModel";
 
 export interface PreviewInputState {
@@ -6,12 +8,21 @@ export interface PreviewInputState {
   readonly aimX: number;
   readonly aimY: number;
   readonly fire: boolean;
+  readonly transition: RunDirection | null;
+  readonly action: RunAction | null;
 }
+
+export type PreviewNoticeTone = GamePreviewAnnouncementTone;
 
 export type PreviewFeedback =
   | { readonly type: "player-hit" }
   | { readonly type: "enemy-hit"; readonly enemyId: string }
-  | { readonly type: "enemy-defeated"; readonly enemyId: string };
+  | { readonly type: "enemy-defeated"; readonly enemyId: string }
+  | {
+      readonly type: "notice";
+      readonly message: string;
+      readonly tone: PreviewNoticeTone;
+    };
 
 export interface PreviewSimulationFrame {
   readonly model: PreviewRenderModel;
@@ -23,4 +34,3 @@ export interface PreviewSimulationPort {
   step(input: PreviewInputState, deltaMs: number): PreviewSimulationFrame;
   current(): PreviewSimulationFrame;
 }
-

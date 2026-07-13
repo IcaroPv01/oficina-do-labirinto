@@ -36,6 +36,8 @@ export class EntityView {
   private enemyTint = 0xffffff;
   private accentTint = 0xffffff;
   private customPlayerSkin = false;
+  private activeSkinTextureKey: string | null = null;
+  private playerRadius = 18;
 
   public constructor(private readonly scene: Phaser.Scene) {
     this.playerShadow = scene.add.ellipse(0, 0, 32, 12, 0x02070c, 0.4).setDepth(8);
@@ -43,8 +45,12 @@ export class EntityView {
   }
 
   public sync(model: PreviewRenderModel): void {
+    this.resizePlayer(model.player.radius);
     this.player.setPosition(model.player.x, model.player.y);
-    this.playerShadow.setPosition(model.player.x, model.player.y + 17);
+    this.playerShadow.setPosition(
+      model.player.x,
+      model.player.y + this.playerRadius * 0.72,
+    );
 
     const enemyIds = new Set(model.enemies.map((enemy) => enemy.id));
     removeMissing(this.enemies, enemyIds, (view) => {
@@ -55,11 +61,19 @@ export class EntityView {
 
     for (const enemy of model.enemies) {
       const view = this.enemies.get(enemy.id) ?? this.createEnemy(enemy);
-      view.sprite.setPosition(enemy.x, enemy.y);
-      view.healthBackground.setPosition(enemy.x, enemy.y - 27);
+      const diameter = Math.max(12, enemy.radius * 2);
+      const healthWidth = Math.max(18, diameter * 0.82);
+      const healthY = enemy.y - enemy.radius - 8;
+      view.sprite.setPosition(enemy.x, enemy.y).setDisplaySize(diameter, diameter);
+      view.healthBackground
+        .setDisplaySize(healthWidth + 2, 5)
+        .setPosition(enemy.x, healthY);
       const healthRatio = Math.max(0, Math.min(1, enemy.health / Math.max(1, enemy.maxHealth)));
-      view.healthFill.setDisplaySize(30 * healthRatio, 3);
-      view.healthFill.setPosition(enemy.x - 15 + (30 * healthRatio) / 2, enemy.y - 27);
+      view.healthFill.setDisplaySize(healthWidth * healthRatio, 3);
+      view.healthFill.setPosition(
+        enemy.x - healthWidth / 2 + (healthWidth * healthRatio) / 2,
+        healthY,
+      );
     }
 
     const projectileIds = new Set(model.projectiles.map((projectile) => projectile.id));
@@ -88,7 +102,9 @@ export class EntityView {
 
     if (!dataUrl) {
       this.customPlayerSkin = false;
-      this.player.setTexture(TEXTURE_KEYS.player).setDisplaySize(42, 42).setTint(this.playerTint);
+      this.player.setTexture(TEXTURE_KEYS.player).setTint(this.playerTint);
+      this.resizePlayer(this.playerRadius);
+      this.releasePreviousSkinTexture();
       return;
     }
 
@@ -114,7 +130,9 @@ export class EntityView {
     image.addEventListener("error", () => {
       if (!this.destroyed && generation === this.skinGeneration) {
         this.customPlayerSkin = false;
-        this.player.setTexture(TEXTURE_KEYS.player).setDisplaySize(42, 42).setTint(this.playerTint);
+        this.player.setTexture(TEXTURE_KEYS.player).setTint(this.playerTint);
+        this.resizePlayer(this.playerRadius);
+        this.releasePreviousSkinTexture();
       }
     });
     image.src = dataUrl;
@@ -179,10 +197,15 @@ export class EntityView {
     });
     removeMissing(this.projectiles, new Set(), (sprite) => sprite.destroy());
     removeMissing(this.pickups, new Set(), (sprite) => sprite.destroy());
+    this.releasePreviousSkinTexture();
   }
 
   private createEnemy(enemy: PreviewEntityModel): EnemyView {
-    const sprite = this.scene.add.image(enemy.x, enemy.y, TEXTURE_KEYS.enemy).setDisplaySize(40, 40).setDepth(9);
+    const diameter = Math.max(12, enemy.radius * 2);
+    const sprite = this.scene.add
+      .image(enemy.x, enemy.y, TEXTURE_KEYS.enemy)
+      .setDisplaySize(diameter, diameter)
+      .setDepth(9);
     const baseTint = this.enemyTint;
     sprite.setTint(baseTint);
     const healthBackground = this.scene.add.rectangle(enemy.x, enemy.y - 27, 32, 5, 0x07101b, 0.95).setDepth(11);
@@ -207,10 +230,37 @@ export class EntityView {
   }
 
   private applyPlayerTexture(key: string): void {
-    const frame = this.scene.textures.getFrame(key);
+    this.player.clearTint().setTexture(key);
+    this.resizePlayer(this.playerRadius);
+    this.releasePreviousSkinTexture(key);
+    this.activeSkinTextureKey = key;
+  }
+
+  private resizePlayer(radius: number): void {
+    this.playerRadius = Math.max(6, radius);
+    const frame = this.player.frame;
     const longestSide = Math.max(1, frame.width, frame.height);
-    const scale = 42 / longestSide;
-    this.player.clearTint().setTexture(key).setDisplaySize(frame.width * scale, frame.height * scale);
+    const diameter = this.playerRadius * 2;
+    const scale = diameter / longestSide;
+    this.player.setDisplaySize(frame.width * scale, frame.height * scale);
+    this.playerShadow.setDisplaySize(
+      diameter * 0.82,
+      Math.max(6, diameter * 0.28),
+    );
+  }
+
+  private releasePreviousSkinTexture(preserveKey: string | null = null): void {
+    const previousKey = this.activeSkinTextureKey;
+    if (
+      previousKey !== null &&
+      previousKey !== preserveKey &&
+      this.scene.textures.exists(previousKey)
+    ) {
+      this.scene.textures.remove(previousKey);
+    }
+    if (previousKey !== preserveKey) {
+      this.activeSkinTextureKey = null;
+    }
   }
 
   private static parseColor(color: string): number {

@@ -9,11 +9,13 @@
     "dev": "npm --workspace web run dev",
     "build": "npm --workspace web run build",
     "preview": "npm --workspace web run preview",
+    "content:apply": "npm --workspace web run content:apply --",
+    "content:validate": "npm --workspace web run content:validate",
     "test": "npm --workspace web run test",
     "test:run": "npm --workspace web run test:run",
     "test:e2e": "npm --workspace web run test:e2e",
     "typecheck": "npm --workspace web run typecheck",
-    "check": "npm run typecheck && npm run test:run && npm run build"
+    "check": "npm run typecheck && npm run test:run && npm run content:validate && npm run build"
   },
   "engines": {
     "node": ">=24.0.0"

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_GAME_PROJECT, parseGameProject } from "../core";
 import {
   GAMEPACK_FORMAT,
   GAMEPACK_VERSION,
@@ -38,5 +39,20 @@ describe("gamepack", () => {
     });
 
     expect(() => parseGamepack(text, parseProject)).toThrow(/Versão 99/);
+  });
+
+  it("reabre um gamepack v1 criado antes das opções de run e de skin", () => {
+    const legacy = structuredClone(DEFAULT_GAME_PROJECT) as unknown as Record<
+      string,
+      unknown
+    >;
+    delete legacy["run"];
+    const player = legacy["player"];
+    if (typeof player === "object" && player !== null && !Array.isArray(player)) {
+      delete (player as Record<string, unknown>)["skinMetadata"];
+    }
+
+    const text = serializeGamepack(legacy);
+    expect(parseGamepack(text, parseGameProject)).toEqual(DEFAULT_GAME_PROJECT);
   });
 });

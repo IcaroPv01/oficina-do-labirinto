@@ -22,6 +22,7 @@ export {
   EMPTY_INPUT,
   createSimulation,
   stepSimulation,
+  type CreateSimulationOptions,
   type EnemyState,
   type PickupState,
   type PlayerState,
@@ -32,5 +33,23 @@ export {
   type SimulationStatus,
   type Vector2,
 } from "./simulation";
+export {
+  EMPTY_RUN_INPUT,
+  createRun,
+  getCurrentRunRoom,
+  getCurrentRunSimulation,
+  stepRun,
+  type CreateRunOptions,
+  type DescendBlockedReason,
+  type PurchaseFailedReason,
+  type RoomReward,
+  type RunAction,
+  type RunDirection,
+  type RunEvent,
+  type RunInput,
+  type RunRoomState,
+  type RunState,
+  type RunStatus,
+  type TransitionBlockedReason,
+} from "./run";
 export { parseGameProjectText, serializeGameProject } from "./serialization";
-

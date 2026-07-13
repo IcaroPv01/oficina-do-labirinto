@@ -30,6 +30,7 @@ export interface EditorProjectFields {
   readonly playerSpeed: number;
   readonly playerSkin: EditorSkin | null;
   readonly enemy: EditorEnemy | null;
+  readonly run: EditorRunSettings;
 }
 
 export interface EditorEnemy {
@@ -46,6 +47,25 @@ export interface EditorSkin {
   readonly dataUrl: string;
   readonly width: number | null;
   readonly height: number | null;
+  readonly bytes: number | null;
+  readonly sha256: string | null;
+  readonly license: EditorSkinLicense;
+}
+
+export type EditorSkinLicense =
+  | "unverified"
+  | "original"
+  | "cc0"
+  | "cc-by"
+  | "cc-by-sa";
+
+export interface EditorRunSettings {
+  readonly endless: boolean;
+  readonly floorLimit: number;
+  readonly roomsPerFloor: number;
+  readonly startingCoins: number;
+  readonly startingKeys: number;
+  readonly shopHeartCost: number;
 }
 
 export type EditorProjectPatch = Partial<
@@ -61,6 +81,8 @@ export type EditorProjectPatch = Partial<
 > & {
   readonly enemy?: Partial<EditorEnemy>;
   readonly playerSkin?: ValidatedPng;
+  readonly playerSkinLicense?: EditorSkinLicense;
+  readonly run?: Partial<EditorRunSettings>;
 };
 
 export function readEditorProject(project: unknown): EditorProjectFields {
@@ -75,6 +97,7 @@ export function readEditorProject(project: unknown): EditorProjectFields {
     playerSpeed: readNumber(project, PATHS.playerSpeed) ?? 180,
     playerSkin: readPlayerSkin(project),
     enemy,
+    run: readRunSettings(project),
   };
 }
 
@@ -100,7 +123,30 @@ export function patchEditorProject<T>(project: T, patch: EditorProjectPatch): T 
     patchPlayerSkin(draft, patch.playerSkin);
   }
 
+  if (patch.playerSkinLicense) {
+    patchPlayerSkinLicense(draft, patch.playerSkinLicense);
+  }
+
+  if (patch.run) {
+    patchRunSettings(draft, patch.run);
+  }
+
   return draft as T;
+}
+
+function patchPlayerSkinLicense(
+  draft: MutableRecord,
+  license: EditorSkinLicense,
+): void {
+  const player = draft["player"];
+  if (
+    !isRecord(player) ||
+    typeof player["skinDataUrl"] !== "string" ||
+    !isRecord(player["skinMetadata"])
+  ) {
+    throw new Error("Importe uma skin antes de informar sua licença.");
+  }
+  player["skinMetadata"]["license"] = license;
 }
 
 function patchFirstEnemy(draft: MutableRecord, patch: Partial<EditorEnemy>): void {
@@ -123,6 +169,15 @@ function patchFirstEnemy(draft: MutableRecord, patch: Partial<EditorEnemy>): voi
 function patchPlayerSkin(draft: MutableRecord, png: ValidatedPng): void {
   if (isRecord(draft["player"]) && "skinDataUrl" in draft["player"]) {
     draft["player"]["skinDataUrl"] = png.dataUrl;
+    draft["player"]["skinMetadata"] = {
+      filename: png.filename,
+      width: png.width,
+      height: png.height,
+      bytes: png.bytes,
+      sha256: png.sha256,
+      origin: "user-upload",
+      license: "unverified",
+    };
     return;
   }
 
@@ -152,12 +207,32 @@ function patchPlayerSkin(draft: MutableRecord, png: ValidatedPng): void {
   assignRecordKey(selected, ["filename", "name"], png.filename);
   assignRecordKey(selected, ["width"], png.width, false);
   assignRecordKey(selected, ["height"], png.height, false);
+  assignRecordKey(selected, ["bytes"], png.bytes);
+  assignRecordKey(selected, ["sha256", "hash"], png.sha256);
+  assignRecordKey(selected, ["origin"], "user-upload");
+  assignRecordKey(selected, ["license"], "unverified");
 
   const dimensions = selected["dimensions"];
   if (isRecord(dimensions)) {
     assignRecordKey(dimensions, ["width"], png.width, false);
     assignRecordKey(dimensions, ["height"], png.height, false);
   }
+}
+
+function patchRunSettings(
+  draft: MutableRecord,
+  patch: Partial<EditorRunSettings>,
+): void {
+  if (!isRecord(draft["run"])) {
+    throw new Error("O projeto não possui configurações de expedição editáveis.");
+  }
+
+  assignRecordKey(draft["run"], ["endless"], patch.endless);
+  assignRecordKey(draft["run"], ["floorLimit"], patch.floorLimit);
+  assignRecordKey(draft["run"], ["roomsPerFloor"], patch.roomsPerFloor);
+  assignRecordKey(draft["run"], ["startingCoins"], patch.startingCoins);
+  assignRecordKey(draft["run"], ["startingKeys"], patch.startingKeys);
+  assignRecordKey(draft["run"], ["shopHeartCost"], patch.shopHeartCost);
 }
 
 function readFirstEnemy(project: unknown): EditorEnemy | null {
@@ -191,11 +266,18 @@ function readPlayerSkin(project: unknown): EditorSkin | null {
 
   const directDataUrl = getPath(project, ["player", "skinDataUrl"]);
   if (typeof directDataUrl === "string" && directDataUrl.startsWith("data:image/png;base64,")) {
+    const metadata = getPath(project, ["player", "skinMetadata"]);
+    const metadataRecord = isRecord(metadata) ? metadata : null;
     return {
-      filename: "skin-personalizada.png",
+      filename:
+        (metadataRecord && readDirectString(metadataRecord, ["filename"])) ??
+        "skin-personalizada.png",
       dataUrl: directDataUrl,
-      width: null,
-      height: null,
+      width: metadataRecord ? readDirectNumber(metadataRecord, ["width"]) : null,
+      height: metadataRecord ? readDirectNumber(metadataRecord, ["height"]) : null,
+      bytes: metadataRecord ? readDirectNumber(metadataRecord, ["bytes"]) : null,
+      sha256: metadataRecord ? readDirectString(metadataRecord, ["sha256"]) : null,
+      license: readSkinLicense(metadataRecord?.["license"]),
     };
   }
 
@@ -232,6 +314,33 @@ function readPlayerSkin(project: unknown): EditorSkin | null {
     dataUrl,
     width: readDirectNumber(dimensions, ["width"]),
     height: readDirectNumber(dimensions, ["height"]),
+    bytes: readDirectNumber(selected, ["bytes"]),
+    sha256: readDirectString(selected, ["sha256", "hash"]),
+    license: readSkinLicense(selected["license"]),
+  };
+}
+
+function readSkinLicense(value: unknown): EditorSkinLicense {
+  return value === "original" ||
+    value === "cc0" ||
+    value === "cc-by" ||
+    value === "cc-by-sa"
+    ? value
+    : "unverified";
+}
+
+function readRunSettings(project: unknown): EditorRunSettings {
+  const run = isRecord(project) && isRecord(project["run"])
+    ? project["run"]
+    : null;
+
+  return {
+    endless: run && typeof run["endless"] === "boolean" ? run["endless"] : false,
+    floorLimit: (run && readDirectNumber(run, ["floorLimit"])) ?? 3,
+    roomsPerFloor: (run && readDirectNumber(run, ["roomsPerFloor"])) ?? 9,
+    startingCoins: (run && readDirectNumber(run, ["startingCoins"])) ?? 0,
+    startingKeys: (run && readDirectNumber(run, ["startingKeys"])) ?? 1,
+    shopHeartCost: (run && readDirectNumber(run, ["shopHeartCost"])) ?? 3,
   };
 }
 

@@ -64,6 +64,17 @@ export interface SimulationState {
   readonly events: readonly SimulationEvent[];
 }
 
+export interface CreateSimulationOptions {
+  /** Overrides the project seed so every room can have its own stable encounter. */
+  readonly seed?: string;
+  /** Allows non-combat rooms to start empty without weakening the project schema. */
+  readonly spawnCount?: number;
+  /** Allows bosses and later floors to scale independently from the base enemy. */
+  readonly enemyMaxHealth?: number;
+  /** Carries health between rooms while keeping createSimulation backwards compatible. */
+  readonly playerHealth?: number;
+}
+
 export const EMPTY_INPUT: SimulationInput = {
   moveX: 0,
   moveY: 0,
@@ -71,8 +82,25 @@ export const EMPTY_INPUT: SimulationInput = {
   shootY: 0,
 };
 
-export function createSimulation(project: GameProject): SimulationState {
-  let rngState = hashSeed(project.seed);
+export function createSimulation(
+  project: GameProject,
+  options: CreateSimulationOptions = {},
+): SimulationState {
+  const seed = options.seed ?? project.seed;
+  const spawnCount = Math.max(
+    0,
+    Math.trunc(options.spawnCount ?? project.enemy.spawnCount),
+  );
+  const enemyMaxHealth = Math.max(
+    1,
+    Math.trunc(options.enemyMaxHealth ?? project.enemy.maxHealth),
+  );
+  const playerHealth = clamp(
+    Math.trunc(options.playerHealth ?? project.player.maxHealth),
+    0,
+    project.player.maxHealth,
+  );
+  let rngState = hashSeed(seed);
   let nextEntityId = 1;
   const center = {
     x: project.world.width / 2,
@@ -80,7 +108,7 @@ export function createSimulation(project: GameProject): SimulationState {
   };
   const enemies: EnemyState[] = [];
 
-  for (let index = 0; index < project.enemy.spawnCount; index += 1) {
+  for (let index = 0; index < spawnCount; index += 1) {
     const angleResult = nextRandom(rngState);
     rngState = angleResult.state;
     const distanceResult = nextRandom(rngState);
@@ -90,7 +118,7 @@ export function createSimulation(project: GameProject): SimulationState {
     const margin = project.world.wallThickness + project.enemy.radius;
     enemies.push({
       id: nextEntityId,
-      health: project.enemy.maxHealth,
+      health: enemyMaxHealth,
       x: clamp(center.x + Math.cos(angle) * distance, margin, project.world.width - margin),
       y: clamp(center.y + Math.sin(angle) * distance, margin, project.world.height - margin),
     });
@@ -98,7 +126,7 @@ export function createSimulation(project: GameProject): SimulationState {
   }
 
   return {
-    seed: project.seed,
+    seed,
     status: enemies.length > 0 ? "playing" : "cleared",
     elapsedSeconds: 0,
     tick: 0,
@@ -108,7 +136,7 @@ export function createSimulation(project: GameProject): SimulationState {
     enemiesDefeated: 0,
     player: {
       ...center,
-      health: project.player.maxHealth,
+      health: playerHealth,
       fireCooldownRemaining: 0,
       invulnerabilityRemaining: 0,
     },
@@ -127,10 +155,11 @@ export function stepSimulation(
 ): SimulationState {
   const deltaSeconds = clamp(requestedDeltaSeconds, 0, 0.05);
 
-  if (previous.status !== "playing" || deltaSeconds === 0) {
+  if (previous.status === "game-over" || deltaSeconds === 0) {
     return { ...previous, events: [] };
   }
 
+  const combatActive = previous.status === "playing";
   const events: SimulationEvent[] = [];
   let rngState = previous.rngState;
   let nextEntityId = previous.nextEntityId;
@@ -159,15 +188,21 @@ export function stepSimulation(
       previous.player.invulnerabilityRemaining - deltaSeconds,
     ),
   };
-  const projectiles: ProjectileState[] = previous.projectiles.map((projectile) => ({
-    ...projectile,
-    x: projectile.x + projectile.velocityX * deltaSeconds,
-    y: projectile.y + projectile.velocityY * deltaSeconds,
-    ageSeconds: projectile.ageSeconds + deltaSeconds,
-  }));
+  const projectiles: ProjectileState[] = combatActive
+    ? previous.projectiles.map((projectile) => ({
+        ...projectile,
+        x: projectile.x + projectile.velocityX * deltaSeconds,
+        y: projectile.y + projectile.velocityY * deltaSeconds,
+        ageSeconds: projectile.ageSeconds + deltaSeconds,
+      }))
+    : [];
 
   const shooting = normalized(input.shootX, input.shootY);
-  if ((shooting.x !== 0 || shooting.y !== 0) && player.fireCooldownRemaining <= 0) {
+  if (
+    combatActive &&
+    (shooting.x !== 0 || shooting.y !== 0) &&
+    player.fireCooldownRemaining <= 0
+  ) {
     const spawnDistance = project.player.radius + 8;
     const projectile: ProjectileState = {
       id: nextEntityId,
@@ -187,25 +222,27 @@ export function stepSimulation(
     events.push({ type: "shot", x: projectile.x, y: projectile.y });
   }
 
-  let enemies = previous.enemies.map((enemy): EnemyState => {
-    const direction = normalized(player.x - enemy.x, player.y - enemy.y);
-    const margin = project.world.wallThickness + project.enemy.radius;
-    return {
-      ...enemy,
-      x: clamp(
-        enemy.x + direction.x * project.enemy.speed * deltaSeconds,
-        margin,
-        project.world.width - margin,
-      ),
-      y: clamp(
-        enemy.y + direction.y * project.enemy.speed * deltaSeconds,
-        margin,
-        project.world.height - margin,
-      ),
-    };
-  });
+  let enemies = combatActive
+    ? previous.enemies.map((enemy): EnemyState => {
+        const direction = normalized(player.x - enemy.x, player.y - enemy.y);
+        const margin = project.world.wallThickness + project.enemy.radius;
+        return {
+          ...enemy,
+          x: clamp(
+            enemy.x + direction.x * project.enemy.speed * deltaSeconds,
+            margin,
+            project.world.width - margin,
+          ),
+          y: clamp(
+            enemy.y + direction.y * project.enemy.speed * deltaSeconds,
+            margin,
+            project.world.height - margin,
+          ),
+        };
+      })
+    : [...previous.enemies];
 
-  if (player.invulnerabilityRemaining <= 0) {
+  if (combatActive && player.invulnerabilityRemaining <= 0) {
     const touchingEnemy = enemies.find(
       (enemy) =>
         squaredDistance(enemy, player) <=
@@ -273,6 +310,9 @@ export function stepSimulation(
   const collectedIds = new Set<number>();
   if (player.health < project.player.maxHealth) {
     for (const pickup of pickups) {
+      if (player.health >= project.player.maxHealth) {
+        break;
+      }
       if (squaredDistance(pickup, player) <= (project.player.radius + 10) ** 2) {
         collectedIds.add(pickup.id);
         events.push({ type: "pickup-collected", pickupId: pickup.id });
@@ -285,11 +325,11 @@ export function stepSimulation(
   }
   pickups = pickups.filter((pickup) => !collectedIds.has(pickup.id));
 
-  let status: SimulationStatus = "playing";
+  let status: SimulationStatus = previous.status;
   if (player.health <= 0) {
     status = "game-over";
     events.push({ type: "game-over" });
-  } else if (enemies.length === 0) {
+  } else if (combatActive && enemies.length === 0) {
     status = "cleared";
     events.push({ type: "room-cleared" });
   }

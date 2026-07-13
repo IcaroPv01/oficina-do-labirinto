@@ -7,6 +7,8 @@ import { PreviewScene } from "./PreviewScene";
 import { GAME_HEIGHT, GAME_WIDTH } from "./roomBackdrop";
 
 export type {
+  GamePreviewAnnouncement,
+  GamePreviewAnnouncementTone,
   GamePreviewOptions,
   GamePreviewPhase,
   GamePreviewPoint,
@@ -34,6 +36,8 @@ export function createGamePreview(
   host.style.aspectRatio = `${GAME_WIDTH} / ${GAME_HEIGHT}`;
   host.style.margin = "0 auto";
   host.style.overflow = "hidden";
+  host.setAttribute("role", "region");
+  host.setAttribute("aria-label", "Estado atual da prévia jogável");
   container.replaceChildren(host);
 
   const scene = new PreviewScene(new CoreSimulationPort(), project, options);
@@ -94,6 +98,13 @@ export function createGamePreview(
       delete container.dataset["gameProjectiles"];
       delete container.dataset["gamePlayerX"];
       delete container.dataset["gamePlayerY"];
+      delete container.dataset["gameFloor"];
+      delete container.dataset["gameRoom"];
+      delete container.dataset["gameRoomKind"];
+      delete container.dataset["gameCoins"];
+      delete container.dataset["gameKeys"];
+      delete container.dataset["gameVisitedRooms"];
+      delete container.dataset["gameMessage"];
     },
   };
 }

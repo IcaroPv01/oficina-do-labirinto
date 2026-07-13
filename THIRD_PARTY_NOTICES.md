@@ -1,5 +1,10 @@
 # Third-party notices
 
+## Produto web publicado
+
+O build estático inclui Phaser, idb, Zod e eventemitter3. Seus avisos e textos
+de licença acompanham o artefato em `web/public/THIRD_PARTY_NOTICES.txt`.
+
 ## Binding of Pysaac
 
 O protótipo Python contém cópias ou adaptações de `camera.py`,
@@ -34,4 +39,3 @@ Os diretórios legados `assets/`, `mods/` e `repos/` não fazem parte do produto
 web nem devem ser publicados até que cada item tenha autoria, origem, licença e
 hash registrados. Ausência deste arquivo no Git não implica remoção dos dados
 locais; eles permanecem preservados no backup local do protótipo.
-

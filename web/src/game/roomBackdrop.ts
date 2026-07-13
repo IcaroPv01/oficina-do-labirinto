@@ -1,6 +1,7 @@
 import type Phaser from "phaser";
 
 import { shortHash } from "./projectPresentation";
+import type { PreviewRoomConnection } from "./renderModel";
 
 export const GAME_WIDTH = 960;
 export const GAME_HEIGHT = 576;
@@ -36,7 +37,12 @@ export class RoomBackdrop {
     this.details = scene.add.graphics().setDepth(-19);
   }
 
-  public redraw(seed: string, palette: RoomPalette): void {
+  public redraw(
+    seed: string,
+    palette: RoomPalette,
+    connections: readonly PreviewRoomConnection[] = [],
+    roomCleared = false,
+  ): void {
     const roomWidth = ROOM_BOUNDS.right - ROOM_BOUNDS.left;
     const roomHeight = ROOM_BOUNDS.bottom - ROOM_BOUNDS.top;
 
@@ -76,22 +82,62 @@ export class RoomBackdrop {
       this.details.strokePath();
     }
 
-    this.drawDoor(GAME_WIDTH / 2, ROOM_BOUNDS.top - 8, true);
-    this.drawDoor(GAME_WIDTH / 2, ROOM_BOUNDS.bottom + 8, true);
-    this.drawDoor(ROOM_BOUNDS.left - 8, GAME_HEIGHT / 2 + 12, false);
-    this.drawDoor(ROOM_BOUNDS.right + 8, GAME_HEIGHT / 2 + 12, false);
+    for (const connection of connections) {
+      this.drawDoor(connection, roomCleared);
+    }
   }
 
-  private drawDoor(x: number, y: number, horizontalWall: boolean): void {
+  private drawDoor(connection: PreviewRoomConnection, roomCleared: boolean): void {
+    const horizontalWall = connection.direction === "north" || connection.direction === "south";
+    const x =
+      connection.direction === "west"
+        ? ROOM_BOUNDS.left - 8
+        : connection.direction === "east"
+          ? ROOM_BOUNDS.right + 8
+          : GAME_WIDTH / 2;
+    const y =
+      connection.direction === "north"
+        ? ROOM_BOUNDS.top - 8
+        : connection.direction === "south"
+          ? ROOM_BOUNDS.bottom + 8
+          : (ROOM_BOUNDS.top + ROOM_BOUNDS.bottom) / 2;
+    const doorColor = !roomCleared
+      ? 0x71808c
+      : connection.locked
+        ? 0xf5bd4f
+        : connection.visited
+          ? 0x5ce1c6
+          : 0x9cf29f;
+
     this.details.fillStyle(0x0a111b, 1);
     if (horizontalWall) {
       this.details.fillRoundedRect(x - 38, y - 10, 76, 20, 6);
-      this.details.lineStyle(3, 0xc99b4b, 0.75);
+      this.details.lineStyle(4, doorColor, 0.95);
       this.details.lineBetween(x - 28, y - 5, x + 28, y - 5);
+      this.details.fillStyle(doorColor, 0.95);
+      const pointsDown = connection.direction === "south";
+      this.details.fillTriangle(
+        x,
+        y + (pointsDown ? 9 : -9),
+        x - 6,
+        y + (pointsDown ? 2 : -2),
+        x + 6,
+        y + (pointsDown ? 2 : -2),
+      );
     } else {
       this.details.fillRoundedRect(x - 10, y - 38, 20, 76, 6);
-      this.details.lineStyle(3, 0xc99b4b, 0.75);
+      this.details.lineStyle(4, doorColor, 0.95);
       this.details.lineBetween(x - 5, y - 28, x - 5, y + 28);
+      this.details.fillStyle(doorColor, 0.95);
+      const pointsRight = connection.direction === "east";
+      this.details.fillTriangle(
+        x + (pointsRight ? 9 : -9),
+        y,
+        x + (pointsRight ? 2 : -2),
+        y - 6,
+        x + (pointsRight ? 2 : -2),
+        y + 6,
+      );
     }
   }
 

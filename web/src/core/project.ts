@@ -1,4 +1,5 @@
 import { z } from "zod";
+import defaultProjectJson from "../../../game-data/default-project.json";
 
 const ColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, {
   message: "Use uma cor hexadecimal no formato #RRGGBB.",
@@ -7,10 +8,36 @@ const ColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, {
 const SkinDataUrlSchema = z
   .string()
   .max(3_000_000)
-  .regex(/^data:image\/png;base64,[A-Za-z0-9+/]+=*$/, {
+  .regex(
+    /^data:image\/png;base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+    {
     message: "A skin deve ser uma imagem PNG incorporada.",
-  })
+    },
+  )
   .nullable();
+
+const SkinMetadataSchema = z
+  .object({
+    filename: z.string().trim().min(1).max(255),
+    width: z.number().int().min(8).max(512),
+    height: z.number().int().min(8).max(512),
+    bytes: z.number().int().min(1).max(2 * 1024 * 1024),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    origin: z.literal("user-upload"),
+    license: z.enum(["unverified", "original", "cc0", "cc-by", "cc-by-sa"]),
+  })
+  .strict()
+  .nullable()
+  .default(null);
+
+const DEFAULT_RUN_SETTINGS = {
+  endless: false,
+  floorLimit: 3,
+  roomsPerFloor: 9,
+  startingCoins: 0,
+  startingKeys: 1,
+  shopHeartCost: 3,
+} as const;
 
 export const GameProjectSchema = z
   .object({
@@ -23,6 +50,7 @@ export const GameProjectSchema = z
         color: ColorSchema,
         accentColor: ColorSchema,
         skinDataUrl: SkinDataUrlSchema,
+        skinMetadata: SkinMetadataSchema,
         maxHealth: z.number().int().min(1).max(20),
         speed: z.number().min(60).max(500),
         radius: z.number().int().min(8).max(32),
@@ -42,6 +70,17 @@ export const GameProjectSchema = z
         dropChance: z.number().min(0).max(1),
       })
       .strict(),
+    run: z
+      .object({
+        endless: z.boolean(),
+        floorLimit: z.number().int().min(1).max(99),
+        roomsPerFloor: z.number().int().min(5).max(24),
+        startingCoins: z.number().int().min(0).max(99),
+        startingKeys: z.number().int().min(1).max(9),
+        shopHeartCost: z.number().int().min(1).max(99),
+      })
+      .strict()
+      .default(DEFAULT_RUN_SETTINGS),
     world: z
       .object({
         width: z.number().int().min(640).max(1920),
@@ -53,44 +92,22 @@ export const GameProjectSchema = z
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((project, context) => {
+    if (project.player.skinDataUrl === null && project.player.skinMetadata !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["player", "skinMetadata"],
+        message: "Metadados de skin exigem uma imagem incorporada.",
+      });
+    }
+  });
 
 export type GameProject = z.infer<typeof GameProjectSchema>;
 
-export const DEFAULT_GAME_PROJECT: GameProject = {
-  schemaVersion: 1,
-  id: "oficina-labirinto",
-  name: "Oficina do Labirinto",
-  seed: "primeira-expedicao",
-  player: {
-    color: "#8aa2ff",
-    accentColor: "#ffd166",
-    skinDataUrl: null,
-    maxHealth: 6,
-    speed: 220,
-    radius: 18,
-    fireCooldownSeconds: 0.24,
-    projectileSpeed: 500,
-  },
-  enemy: {
-    name: "Sentinela",
-    color: "#ff6b7a",
-    maxHealth: 3,
-    speed: 72,
-    radius: 18,
-    spawnCount: 4,
-    contactDamage: 1,
-    dropChance: 0.35,
-  },
-  world: {
-    width: 960,
-    height: 576,
-    wallThickness: 32,
-    backgroundColor: "#10131c",
-    floorColor: "#182136",
-    wallColor: "#40517d",
-  },
-};
+/** The versioned JSON file is the single source that content changes publish. */
+export const DEFAULT_GAME_PROJECT: GameProject =
+  GameProjectSchema.parse(defaultProjectJson);
 
 export function parseGameProject(value: unknown): GameProject {
   return GameProjectSchema.parse(value);
@@ -101,5 +118,16 @@ export function safeParseGameProject(value: unknown) {
 }
 
 export function cloneGameProject(project: GameProject): GameProject {
-  return structuredClone(project);
+  return {
+    ...project,
+    player: {
+      ...project.player,
+      skinMetadata: project.player.skinMetadata
+        ? { ...project.player.skinMetadata }
+        : null,
+    },
+    enemy: { ...project.enemy },
+    run: { ...project.run },
+    world: { ...project.world },
+  };
 }

@@ -1,12 +1,15 @@
 import Phaser from "phaser";
 
+import type { RunAction, RunDirection } from "../core";
 import type { GamePreviewOptions, GamePreviewPhase, GamePreviewSnapshot, GamePreviewStatus } from "./contracts";
 import { EntityView } from "./entityView";
+import { advanceFixedClock, FIXED_STEP_MS } from "./fixedStep";
 import { PreviewHud } from "./hud";
 import { readProjectPresentation } from "./projectPresentation";
 import type { ProjectPresentation } from "./projectPresentation";
 import { RoomBackdrop } from "./roomBackdrop";
 import type { PreviewSimulationFrame, PreviewSimulationPort } from "./simulationPort";
+import { hasCollectiblePickup } from "./renderModel";
 import { ensurePreviewTextures } from "./textures";
 
 interface KeyMap {
@@ -24,7 +27,8 @@ const STATUS_LABELS: Readonly<Record<GamePreviewPhase, string>> = {
   loading: "Preparando a sala",
   playing: "Jogando",
   paused: "Jogo pausado",
-  "room-cleared": "Sala limpa. Vitória",
+  "room-cleared": "Sala concluída. Escolha uma porta",
+  victory: "Expedição concluída. Vitória",
   "game-over": "Fim de jogo",
   destroyed: "Prévia encerrada",
 };
@@ -43,7 +47,13 @@ export class PreviewScene extends Phaser.Scene {
   private frame: PreviewSimulationFrame | null = null;
   private previewPaused = false;
   private lastSnapshotAt = Number.NEGATIVE_INFINITY;
+  private lastSnapshotSemanticKey = "";
   private lastStatusKey = "";
+  private fixedRemainderMs = 0;
+  private pendingTransition: RunDirection | null = null;
+  private pendingAction: RunAction | null = null;
+  private backdropStateKey = "";
+  private lastFeedbackMessage = "";
   private disposed = false;
 
   public constructor(simulation: PreviewSimulationPort, project: unknown, options: GamePreviewOptions) {
@@ -58,15 +68,28 @@ export class PreviewScene extends Phaser.Scene {
     ensurePreviewTextures(this);
     this.backdrop = new RoomBackdrop(this);
     this.entities = new EntityView(this);
-    this.hud = new PreviewHud(this);
+    this.hud = new PreviewHud(this, () => this.clearSemanticFeedback());
     this.keys = this.createKeys();
     this.input.keyboard?.on("keydown-ESC", this.handlePauseKey, this);
     this.input.keyboard?.on("keydown-R", this.handleRestartKey, this);
+    this.input.keyboard?.on("keydown-W", this.handleNorthKey, this);
+    this.input.keyboard?.on("keydown-S", this.handleSouthKey, this);
+    this.input.keyboard?.on("keydown-A", this.handleWestKey, this);
+    this.input.keyboard?.on("keydown-D", this.handleEastKey, this);
+    this.input.keyboard?.on("keydown-SPACE", this.handleActionKey, this);
 
     const canvas = this.game.canvas;
     canvas.tabIndex = 0;
-    canvas.setAttribute("role", "img");
-    canvas.setAttribute("aria-label", "Prévia jogável da sala. Clique para controlar.");
+    canvas.setAttribute("role", "application");
+    canvas.setAttribute(
+      "aria-label",
+      "Prévia jogável da expedição. Clique para controlar com o teclado.",
+    );
+    canvas.setAttribute("aria-describedby", "preview-controls");
+    canvas.setAttribute(
+      "aria-keyshortcuts",
+      "W A S D ArrowUp ArrowDown ArrowLeft ArrowRight Space Escape R",
+    );
     canvas.style.imageRendering = "pixelated";
     this.input.on(Phaser.Input.Events.POINTER_DOWN, this.focusCanvas, this);
 
@@ -85,8 +108,44 @@ export class PreviewScene extends Phaser.Scene {
       return;
     }
 
-    const input = this.readInput();
-    this.frame = this.simulation.step(input, Math.min(50, Math.max(0, delta)));
+    if (
+      this.frame.model.phase === "room-cleared" &&
+      !hasCollectiblePickup(this.frame.model) &&
+      this.pendingTransition === null &&
+      this.pendingAction === null
+    ) {
+      this.fixedRemainderMs = 0;
+      return;
+    }
+
+    const clock = advanceFixedClock(this.fixedRemainderMs, delta);
+    this.fixedRemainderMs = clock.remainderMs;
+    if (clock.stepCount === 0) {
+      return;
+    }
+
+    const heldInput = this.readInput();
+    const transition = this.pendingTransition;
+    const action = this.pendingAction;
+    this.pendingTransition = null;
+    this.pendingAction = null;
+    const feedback: PreviewSimulationFrame["feedback"][number][] = [];
+    let nextFrame = this.frame;
+    for (let step = 0; step < clock.stepCount; step += 1) {
+      nextFrame = this.simulation.step(
+        {
+          ...heldInput,
+          transition: step === 0 ? transition : null,
+          action: step === 0 ? action : null,
+        },
+        FIXED_STEP_MS,
+      );
+      feedback.push(...nextFrame.feedback);
+      if (this.isTerminal(nextFrame.model.phase)) {
+        break;
+      }
+    }
+    this.frame = { ...nextFrame, feedback };
     this.renderFrame(this.frame, false);
   }
 
@@ -101,6 +160,7 @@ export class PreviewScene extends Phaser.Scene {
   public restartPreview(): void {
     if (this.sys.isActive()) {
       this.resetSimulation();
+      this.focusCanvas();
     }
   }
 
@@ -109,6 +169,9 @@ export class PreviewScene extends Phaser.Scene {
       return;
     }
     this.previewPaused = paused;
+    if (!paused) {
+      this.focusCanvas();
+    }
     this.renderFrame(this.frame, true);
   }
 
@@ -120,6 +183,11 @@ export class PreviewScene extends Phaser.Scene {
     this.input.off(Phaser.Input.Events.POINTER_DOWN, this.focusCanvas, this);
     this.input.keyboard?.off("keydown-ESC", this.handlePauseKey, this);
     this.input.keyboard?.off("keydown-R", this.handleRestartKey, this);
+    this.input.keyboard?.off("keydown-W", this.handleNorthKey, this);
+    this.input.keyboard?.off("keydown-S", this.handleSouthKey, this);
+    this.input.keyboard?.off("keydown-A", this.handleWestKey, this);
+    this.input.keyboard?.off("keydown-D", this.handleEastKey, this);
+    this.input.keyboard?.off("keydown-SPACE", this.handleActionKey, this);
     this.backdrop?.destroy();
     this.entities?.destroy();
     this.hud?.destroy();
@@ -165,10 +233,59 @@ export class PreviewScene extends Phaser.Scene {
     this.restartPreview();
   }
 
+  private handleNorthKey(event: KeyboardEvent): void {
+    this.queueTransition("north", event);
+  }
+
+  private handleSouthKey(event: KeyboardEvent): void {
+    this.queueTransition("south", event);
+  }
+
+  private handleWestKey(event: KeyboardEvent): void {
+    this.queueTransition("west", event);
+  }
+
+  private handleEastKey(event: KeyboardEvent): void {
+    this.queueTransition("east", event);
+  }
+
+  private queueTransition(direction: RunDirection, event: KeyboardEvent): void {
+    if (
+      event.repeat ||
+      !this.hasKeyboardFocus() ||
+      !this.frame?.model.roomCleared ||
+      hasCollectiblePickup(this.frame.model) ||
+      this.isTerminal(this.frame.model.phase)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    this.pendingTransition ??= direction;
+  }
+
+  private handleActionKey(event: KeyboardEvent): void {
+    if (event.repeat || !this.hasKeyboardFocus() || !this.frame || this.isTerminal(this.frame.model.phase)) {
+      return;
+    }
+    const { roomKind } = this.frame.model;
+    if (roomKind !== "shop" && roomKind !== "boss") {
+      return;
+    }
+    event.preventDefault();
+    if (roomKind === "boss" && !this.frame.model.roomCleared) {
+      return;
+    }
+    this.pendingAction ??= roomKind === "shop" ? "buy-heart" : "descend";
+  }
+
   private resetSimulation(): void {
     this.previewPaused = false;
+    this.fixedRemainderMs = 0;
+    this.pendingTransition = null;
+    this.pendingAction = null;
+    this.backdropStateKey = "";
+    this.lastFeedbackMessage = "";
     this.presentation = readProjectPresentation(this.project);
-    this.backdrop?.redraw(this.presentation.seed, this.presentation);
     this.entities?.setPalette(
       this.presentation.playerColor,
       this.presentation.playerAccentColor,
@@ -176,7 +293,9 @@ export class PreviewScene extends Phaser.Scene {
     );
     this.entities?.setPlayerSkin(this.presentation.playerSkinDataUrl);
     this.frame = this.simulation.reset(this.project, this.presentation.seed);
+    this.hud?.clearFeedback();
     this.lastSnapshotAt = Number.NEGATIVE_INFINITY;
+    this.lastSnapshotSemanticKey = "";
     this.lastStatusKey = "";
     this.renderFrame(this.frame, true);
   }
@@ -187,19 +306,38 @@ export class PreviewScene extends Phaser.Scene {
     readonly aimX: number;
     readonly aimY: number;
     readonly fire: boolean;
+    readonly transition: null;
+    readonly action: null;
   } {
     if (!this.keys) {
-      return { moveX: 0, moveY: 0, aimX: 0, aimY: 0, fire: false };
+      return {
+        moveX: 0,
+        moveY: 0,
+        aimX: 0,
+        aimY: 0,
+        fire: false,
+        transition: null,
+        action: null,
+      };
     }
 
     const moveX = Number(this.keys.moveRight.isDown) - Number(this.keys.moveLeft.isDown);
     const moveY = Number(this.keys.moveDown.isDown) - Number(this.keys.moveUp.isDown);
     const aimX = Number(this.keys.fireRight.isDown) - Number(this.keys.fireLeft.isDown);
     const aimY = Number(this.keys.fireDown.isDown) - Number(this.keys.fireUp.isDown);
-    return { moveX, moveY, aimX, aimY, fire: aimX !== 0 || aimY !== 0 };
+    return {
+      moveX,
+      moveY,
+      aimX,
+      aimY,
+      fire: aimX !== 0 || aimY !== 0,
+      transition: null,
+      action: null,
+    };
   }
 
   private renderFrame(frame: PreviewSimulationFrame, forceSnapshot: boolean): void {
+    this.redrawBackdrop(frame);
     this.entities?.sync(frame.model);
     for (const feedback of frame.feedback) {
       if (feedback.type === "player-hit") {
@@ -207,6 +345,15 @@ export class PreviewScene extends Phaser.Scene {
         if (this.options.reducedMotion !== true) {
           this.cameras.main.shake(70, 0.004);
         }
+      } else if (feedback.type === "notice") {
+        this.lastFeedbackMessage = feedback.message;
+        this.hud?.showFeedback(feedback.message, feedback.tone);
+        this.invokeSafely(() =>
+          this.options.onAnnouncement?.({
+            message: feedback.message,
+            tone: feedback.tone,
+          }),
+        );
       } else {
         this.entities?.flashEnemy(feedback.enemyId);
       }
@@ -217,8 +364,24 @@ export class PreviewScene extends Phaser.Scene {
     this.emitStatus(snapshot.phase);
     this.updateSemanticState(snapshot);
 
-    if (forceSnapshot || frame.model.elapsedTimeMs - this.lastSnapshotAt >= SNAPSHOT_INTERVAL_MS) {
+    const semanticKey = [
+      snapshot.phase,
+      snapshot.floor,
+      snapshot.currentRoomId,
+      snapshot.roomKind,
+      snapshot.health,
+      snapshot.enemyCount,
+      snapshot.coins,
+      snapshot.keys,
+      snapshot.visitedRoomIds.join(","),
+    ].join(":");
+    if (
+      forceSnapshot ||
+      semanticKey !== this.lastSnapshotSemanticKey ||
+      frame.model.elapsedTimeMs - this.lastSnapshotAt >= SNAPSHOT_INTERVAL_MS
+    ) {
       this.lastSnapshotAt = frame.model.elapsedTimeMs;
+      this.lastSnapshotSemanticKey = semanticKey;
       this.invokeSafely(() => this.options.onSnapshot?.(snapshot));
     }
   }
@@ -235,6 +398,14 @@ export class PreviewScene extends Phaser.Scene {
       elapsedTimeMs: frame.model.elapsedTimeMs,
       playerPosition: { x: frame.model.player.x, y: frame.model.player.y },
       paused: this.previewPaused,
+      floor: frame.model.floor,
+      currentRoomId: frame.model.currentRoomId,
+      roomKind: frame.model.roomKind,
+      coins: frame.model.coins,
+      keys: frame.model.keys,
+      shopHeartCost: frame.model.shopHeartCost,
+      dungeon: frame.model.dungeon,
+      visitedRoomIds: frame.model.visitedRoomIds,
     };
   }
 
@@ -244,7 +415,7 @@ export class PreviewScene extends Phaser.Scene {
       label: STATUS_LABELS[phase],
       seed: this.presentation.seed,
     };
-    const key = `${status.phase}:${status.seed}`;
+    const key = `${status.phase}:${status.seed}:${this.frame?.model.floor ?? 0}:${this.frame?.model.currentRoomId ?? ""}`;
     if (key === this.lastStatusKey) {
       return;
     }
@@ -264,10 +435,39 @@ export class PreviewScene extends Phaser.Scene {
     parent.dataset["gameProjectiles"] = String(snapshot.projectileCount);
     parent.dataset["gamePlayerX"] = String(Math.round(snapshot.playerPosition.x));
     parent.dataset["gamePlayerY"] = String(Math.round(snapshot.playerPosition.y));
-    parent.setAttribute(
-      "aria-label",
-      `${STATUS_LABELS[snapshot.phase]}. Seed ${snapshot.seed}. Vida ${snapshot.health} de ${snapshot.maxHealth}. ${snapshot.enemyCount} inimigos.`,
-    );
+    parent.dataset["gameFloor"] = String(snapshot.floor);
+    parent.dataset["gameRoom"] = snapshot.currentRoomId;
+    parent.dataset["gameRoomKind"] = snapshot.roomKind;
+    parent.dataset["gameCoins"] = String(snapshot.coins);
+    parent.dataset["gameKeys"] = String(snapshot.keys);
+    parent.dataset["gameVisitedRooms"] = snapshot.visitedRoomIds.join(",");
+    if (this.lastFeedbackMessage.length > 0) {
+      parent.dataset["gameMessage"] = this.lastFeedbackMessage;
+    }
+    const semanticLabel = `${STATUS_LABELS[snapshot.phase]}. Andar ${snapshot.floor}. Sala ${snapshot.roomKind}. Vida ${snapshot.health} de ${snapshot.maxHealth}. ${snapshot.enemyCount} inimigos. ${snapshot.coins} moedas e ${snapshot.keys} chaves.${this.lastFeedbackMessage ? ` ${this.lastFeedbackMessage}` : ""}`;
+    if (parent.getAttribute("aria-label") !== semanticLabel) {
+      parent.setAttribute("aria-label", semanticLabel);
+    }
+
+    const canvas = this.game.canvas;
+    const canvasLabel = `${semanticLabel} Use WASD para mover, setas para atirar, espaço para interagir, Escape para pausar e R para reiniciar.`;
+    if (canvas.getAttribute("aria-label") !== canvasLabel) {
+      canvas.setAttribute("aria-label", canvasLabel);
+    }
+  }
+
+  private clearSemanticFeedback(): void {
+    if (this.lastFeedbackMessage.length === 0) {
+      return;
+    }
+    this.lastFeedbackMessage = "";
+    const parent = this.game.canvas.parentElement;
+    if (parent) {
+      delete parent.dataset["gameMessage"];
+    }
+    if (this.frame) {
+      this.updateSemanticState(this.createSnapshot(this.frame));
+    }
   }
 
   private hasKeyboardFocus(): boolean {
@@ -281,7 +481,26 @@ export class PreviewScene extends Phaser.Scene {
   }
 
   private isTerminal(phase: GamePreviewPhase): boolean {
-    return phase === "game-over" || phase === "room-cleared" || phase === "destroyed";
+    return phase === "game-over" || phase === "victory" || phase === "destroyed";
+  }
+
+  private redrawBackdrop(frame: PreviewSimulationFrame): void {
+    const model = frame.model;
+    const connectionKey = model.connections
+      .map((connection) => `${connection.direction}:${connection.visited}:${connection.locked}`)
+      .sort()
+      .join("|");
+    const key = `${model.floor}:${model.currentRoomId}:${model.roomCleared}:${connectionKey}`;
+    if (key === this.backdropStateKey) {
+      return;
+    }
+    this.backdropStateKey = key;
+    this.backdrop?.redraw(
+      `${this.presentation.seed}:floor:${model.floor}:${model.currentRoomId}`,
+      this.presentation,
+      model.connections,
+      model.roomCleared,
+    );
   }
 
   private invokeSafely(callback: () => void): void {

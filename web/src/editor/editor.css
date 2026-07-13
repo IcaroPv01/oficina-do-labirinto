@@ -86,7 +86,8 @@
 .editor-panel {
   align-self: start;
   max-height: calc(100vh - 6.8rem);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 1rem;
 }
 
@@ -150,6 +151,35 @@
   padding: 0.2rem;
 }
 
+.toggle-field {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  margin-bottom: 0.8rem;
+  color: #cad3ed;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.toggle-field input {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--accent);
+}
+
+.dungeon-map-host {
+  min-width: 0;
+  margin-top: 0.4rem;
+}
+
+.editor-panel .dungeon-map {
+  padding: 0.65rem;
+}
+
+.editor-panel .dungeon-map__canvas {
+  min-height: 10rem;
+}
+
 .field-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -191,6 +221,18 @@
   max-width: 100%;
   max-height: 100%;
   image-rendering: pixelated;
+}
+
+.game-preview canvas:focus-visible {
+  outline: 3px solid #ffd477;
+  outline-offset: -4px;
+}
+
+.preview-controls {
+  margin: 0.55rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
 }
 
 .preview-empty {
@@ -279,6 +321,16 @@
   width: 100%;
 }
 
+.button-like:has(+ .sr-only:focus-visible) {
+  outline: 3px solid #ffd477;
+  outline-offset: 2px;
+}
+
+.button-like:has(+ .sr-only:disabled) {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .status-bar {
   display: flex;
   gap: 0.65rem;
@@ -316,6 +368,15 @@
 
 .save-state {
   white-space: nowrap;
+}
+
+.license-link {
+  color: #bdc9e8;
+}
+
+.license-link:hover,
+.license-link:focus-visible {
+  color: #fff;
 }
 
 .button--quiet {

@@ -1,19 +1,28 @@
 import "./editor/editor.css";
 
 import {
+  cloneGameProject,
   DEFAULT_GAME_PROJECT,
   parseGameProject,
   type GameProject,
+  type RoomKind,
 } from "./core";
-import {
-  createGamePreview,
-  type GamePreviewHandle,
-  type GamePreviewSnapshot,
-  type GamePreviewStatus,
+import type {
+  GamePreviewAnnouncement,
+  GamePreviewHandle,
+  GamePreviewSnapshot,
+  GamePreviewStatus,
 } from "./game";
 import { downloadGamepack, parseGamepack } from "./editor/gamepack";
 import { EditorHistory, type HistorySnapshot } from "./editor/history";
-import { readValidatedPng } from "./editor/image-upload";
+import {
+  readValidatedPng,
+  validateEmbeddedPngDataUrl,
+} from "./editor/image-upload";
+import {
+  createDungeonMap,
+  type DungeonMapHandle,
+} from "./editor/dungeon-map";
 import {
   patchEditorProject,
   readEditorProject,
@@ -39,7 +48,14 @@ interface EditorElements {
   readonly enemyHealth: HTMLInputElement;
   readonly enemySpeed: HTMLInputElement;
   readonly enemyDamage: HTMLInputElement;
+  readonly runEndless: HTMLInputElement;
+  readonly floorLimit: HTMLInputElement;
+  readonly roomsPerFloor: HTMLInputElement;
+  readonly startingCoins: HTMLInputElement;
+  readonly startingKeys: HTMLInputElement;
+  readonly shopHeartCost: HTMLInputElement;
   readonly skinUpload: HTMLInputElement;
+  readonly skinLicense: HTMLSelectElement;
   readonly skinPreview: HTMLElement;
   readonly skinMetadata: HTMLElement;
   readonly undo: HTMLButtonElement;
@@ -50,6 +66,7 @@ interface EditorElements {
   readonly exportProject: HTMLButtonElement;
   readonly importProject: HTMLInputElement;
   readonly preview: HTMLElement;
+  readonly dungeonMap: HTMLElement;
   readonly metrics: HTMLElement;
   readonly previewStatus: HTMLElement;
   readonly statusBar: HTMLElement;
@@ -68,11 +85,16 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
 
   let project = structuredClone(DEFAULT_GAME_PROJECT) as GameProject;
   let restoredAt: Date | null = null;
+  let shouldPersistMigration = false;
 
   try {
     const stored = await loadAutosave<unknown>();
     if (stored) {
-      project = parseGameProject(stored.project);
+      const restoredProject = parseGameProject(stored.project);
+      shouldPersistMigration =
+        restoredProject.player.skinDataUrl !== null &&
+        restoredProject.player.skinMetadata === null;
+      project = await validateProjectSkin(restoredProject);
       restoredAt = stored.updatedAt;
     }
   } catch (cause: unknown) {
@@ -82,8 +104,10 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
     );
   }
 
-  const history = new EditorHistory<GameProject>(project, 75);
+  const history = new EditorHistory<GameProject>(project, 75, cloneGameProject);
   let gamePreview: GamePreviewHandle | null = null;
+  let dungeonMap: DungeonMapHandle | null = null;
+  let dungeonMapStateKey = "";
   let previewPaused = false;
 
   const autosave = createAutosaveController<GameProject>(saveAutosave, {
@@ -99,6 +123,9 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
       );
     },
   });
+  if (shouldPersistMigration) {
+    autosave.schedule(project);
+  }
 
   const renderProject = (snapshot: HistorySnapshot<GameProject>): void => {
     project = snapshot.present;
@@ -137,6 +164,14 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
       });
     }
 
+    elements.runEndless.checked = fields.run.endless;
+    elements.floorLimit.value = String(fields.run.floorLimit);
+    elements.floorLimit.disabled = fields.run.endless;
+    elements.roomsPerFloor.value = String(fields.run.roomsPerFloor);
+    elements.startingCoins.value = String(fields.run.startingCoins);
+    elements.startingKeys.value = String(fields.run.startingKeys);
+    elements.shopHeartCost.value = String(fields.run.shopHeartCost);
+
     renderSkin(
       elements.skinPreview,
       elements.skinMetadata,
@@ -144,18 +179,16 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
       fields.playerPrimaryColor,
       fields.playerSecondaryColor,
     );
+    elements.skinLicense.disabled = fields.playerSkin === null;
+    elements.skinLicense.value = fields.playerSkin?.license ?? "unverified";
   };
 
   const applySnapshot = (
     snapshot: HistorySnapshot<GameProject>,
     message: string,
-    restartPreview = false,
   ): void => {
     renderProject(snapshot);
     gamePreview?.updateProject(project);
-    if (restartPreview) {
-      gamePreview?.restart();
-    }
     autosave.schedule(project);
     setStatus(message);
   };
@@ -163,12 +196,11 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
   const commit = (
     patch: EditorProjectPatch,
     message: string,
-    restartPreview = false,
   ): void => {
     try {
       const draft = patchEditorProject(project, patch);
       const nextProject = parseGameProject(draft);
-      applySnapshot(history.push(nextProject), message, restartPreview);
+      applySnapshot(history.push(nextProject), message);
     } catch (cause: unknown) {
       renderProject(history.snapshot);
       setStatus(`Mudança rejeitada. ${errorMessage(cause)}`, "error");
@@ -181,7 +213,7 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
     message: string,
   ): void => {
     try {
-      commit(createPatch(numberFromInput(input)), message, true);
+      commit(createPatch(numberFromInput(input)), message);
     } catch (cause: unknown) {
       renderProject(history.snapshot);
       setStatus(`Valor inválido. ${errorMessage(cause)}`, "error");
@@ -191,20 +223,70 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
   renderProject(history.snapshot);
 
   try {
+    const { createGamePreview } = await import("./game");
     gamePreview = createGamePreview(elements.preview, project, {
       autoFocus: false,
       reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
       onStatusChange(status: GamePreviewStatus) {
         renderPreviewStatus(elements, status);
         previewPaused = status.phase === "paused";
+        const terminal =
+          status.phase === "victory" ||
+          status.phase === "game-over" ||
+          status.phase === "destroyed";
+        elements.play.disabled = terminal;
+        elements.pause.disabled = terminal;
         elements.pause.textContent = previewPaused ? "Continuar" : "Pausar";
+      },
+      onAnnouncement(announcement: GamePreviewAnnouncement) {
+        setStatus(
+          announcement.message,
+          announcement.tone === "error"
+            ? "error"
+            : announcement.tone === "warning"
+              ? "working"
+              : "ready",
+        );
       },
       onSnapshot(snapshot: GamePreviewSnapshot) {
         renderPreviewMetrics(elements.metrics, snapshot);
+        const nextMapStateKey = [
+          snapshot.dungeon.seed,
+          snapshot.floor,
+          snapshot.currentRoomId,
+          ...snapshot.visitedRoomIds,
+          ...snapshot.dungeon.rooms.map(
+            (room) => `${room.id}:${room.kind}:${room.x},${room.y}`,
+          ),
+        ].join(":");
+        if (nextMapStateKey !== dungeonMapStateKey) {
+          dungeonMapStateKey = nextMapStateKey;
+          const options = {
+            currentRoomId: snapshot.currentRoomId,
+            visitedRoomIds: snapshot.visitedRoomIds,
+            onRoomSelect(room: { readonly kind: RoomKind; readonly id: string }) {
+              setStatus(
+                `${roomKindLabel(room.kind)} selecionada no mapa (${room.id}). O mapa é informativo; use as portas no jogo para viajar.`,
+              );
+            },
+          };
+          if (dungeonMap) {
+            dungeonMap.update(snapshot.dungeon, options);
+          } else {
+            dungeonMap = createDungeonMap(
+              elements.dungeonMap,
+              snapshot.dungeon,
+              options,
+            );
+          }
+        }
       },
     });
   } catch (cause: unknown) {
     elements.preview.replaceChildren();
+    elements.play.disabled = true;
+    elements.pause.disabled = true;
+    elements.restart.disabled = true;
     const message = document.createElement("p");
     message.className = "preview-empty";
     message.textContent = `A prévia não pôde iniciar. ${errorMessage(cause)}`;
@@ -226,7 +308,6 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
     commit(
       { seed: elements.seed.value.trim() },
       "Seed atualizada e partida reiniciada.",
-      true,
     );
   });
   elements.playerPrimary.addEventListener("change", () => {
@@ -289,6 +370,50 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
     );
   });
 
+  elements.runEndless.addEventListener("change", () => {
+    commit(
+      { run: { endless: elements.runEndless.checked } },
+      elements.runEndless.checked
+        ? "Modo sem fim ativado."
+        : "Modo com expedição final ativado.",
+    );
+  });
+  elements.floorLimit.addEventListener("change", () => {
+    commitNumericInput(
+      elements.floorLimit,
+      (value) => ({ run: { floorLimit: value } }),
+      "Quantidade de andares atualizada.",
+    );
+  });
+  elements.roomsPerFloor.addEventListener("change", () => {
+    commitNumericInput(
+      elements.roomsPerFloor,
+      (value) => ({ run: { roomsPerFloor: value } }),
+      "Quantidade de salas por andar atualizada.",
+    );
+  });
+  elements.startingCoins.addEventListener("change", () => {
+    commitNumericInput(
+      elements.startingCoins,
+      (value) => ({ run: { startingCoins: value } }),
+      "Moedas iniciais atualizadas.",
+    );
+  });
+  elements.startingKeys.addEventListener("change", () => {
+    commitNumericInput(
+      elements.startingKeys,
+      (value) => ({ run: { startingKeys: value } }),
+      "Chaves iniciais atualizadas.",
+    );
+  });
+  elements.shopHeartCost.addEventListener("change", () => {
+    commitNumericInput(
+      elements.shopHeartCost,
+      (value) => ({ run: { shopHeartCost: value } }),
+      "Preço do coração atualizado.",
+    );
+  });
+
   elements.skinUpload.addEventListener("change", async () => {
     const file = elements.skinUpload.files?.[0];
     if (!file) {
@@ -310,12 +435,31 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
       elements.skinUpload.disabled = false;
     }
   });
+  elements.skinLicense.addEventListener("change", () => {
+    const license = elements.skinLicense.value;
+    if (
+      license !== "unverified" &&
+      license !== "original" &&
+      license !== "cc0" &&
+      license !== "cc-by" &&
+      license !== "cc-by-sa"
+    ) {
+      setStatus("Licença de skin inválida.", "error");
+      return;
+    }
+    commit(
+      { playerSkinLicense: license },
+      license === "unverified"
+        ? "A licença da skin ficou pendente de confirmação."
+        : "Licença da skin registrada no projeto.",
+    );
+  });
 
   elements.undo.addEventListener("click", () => {
-    applySnapshot(history.undo(), "Última mudança desfeita.", true);
+    applySnapshot(history.undo(), "Última mudança desfeita.");
   });
   elements.redo.addEventListener("click", () => {
-    applySnapshot(history.redo(), "Mudança refeita.", true);
+    applySnapshot(history.redo(), "Mudança refeita.");
   });
   elements.play.addEventListener("click", () => {
     gamePreview?.resume();
@@ -338,7 +482,9 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
   elements.exportProject.addEventListener("click", async () => {
     await autosave.flush();
     downloadGamepack(project, readEditorProject(project).name);
-    setStatus("Gamepack exportado. Guarde o arquivo ou adicione-o ao Git.");
+    setStatus(
+      "Gamepack exportado. Envie-o ao colaborador ou aplique-o numa branch local.",
+    );
   });
   elements.importProject.addEventListener("change", async () => {
     const file = elements.importProject.files?.[0];
@@ -351,11 +497,12 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
       if (file.size > 8 * 1024 * 1024) {
         throw new Error("O gamepack excede o limite de 8 MB deste editor.");
       }
-      const importedProject = parseGamepack(await file.text(), parseGameProject);
+      const importedProject = await validateProjectSkin(
+        parseGamepack(await file.text(), parseGameProject),
+      );
       applySnapshot(
         history.reset(importedProject),
         `Projeto “${readEditorProject(importedProject).name}” importado.`,
-        true,
       );
     } catch (cause: unknown) {
       setStatus(`O projeto não foi importado. ${errorMessage(cause)}`, "error");
@@ -369,20 +516,24 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
       void autosave.flush();
     }
   });
-  window.addEventListener("beforeunload", () => {
-    void autosave.dispose();
-    gamePreview?.destroy();
+  window.addEventListener("pagehide", (event) => {
+    void autosave.flush();
+    if (!event.persisted) {
+      void autosave.dispose();
+      dungeonMap?.destroy();
+      gamePreview?.destroy();
+    }
   });
 
-  required(root, "[data-app-shell]", "aplicação").setAttribute(
-    "data-testid",
-    "app-ready",
-  );
+  const appShell = required<HTMLElement>(root, "[data-app-shell]", "aplicação");
+  appShell.removeAttribute("inert");
+  appShell.setAttribute("aria-busy", "false");
+  appShell.setAttribute("data-testid", "app-ready");
 }
 
 function applicationTemplate(): string {
   return `
-    <div class="editor-shell" data-app-shell>
+    <div class="editor-shell" data-app-shell inert aria-busy="true">
       <header class="editor-topbar">
         <div class="editor-brand">
           <div class="editor-brand__mark" aria-hidden="true">◆</div>
@@ -412,14 +563,47 @@ function applicationTemplate(): string {
           <label class="editor-field">
             <span>Seed da partida</span>
             <input data-testid="seed-input" type="text" maxlength="80" spellcheck="false" autocomplete="off">
-            <small>A mesma seed reproduz a mesma sala.</small>
+            <small>A mesma seed reproduz a mesma expedição.</small>
           </label>
+          <hr class="editor-divider">
+          <h3>Expedição</h3>
+          <label class="toggle-field">
+            <input type="checkbox" data-run-endless>
+            <span>Modo sem fim</span>
+          </label>
+          <div class="field-row">
+            <label class="editor-field">
+              <span>Andares</span>
+              <input type="number" data-floor-limit min="1" max="99" step="1">
+            </label>
+            <label class="editor-field">
+              <span>Salas/andar</span>
+              <input type="number" data-rooms-per-floor min="5" max="24" step="1">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="editor-field">
+              <span>Moedas iniciais</span>
+              <input type="number" data-starting-coins min="0" max="99" step="1">
+            </label>
+            <label class="editor-field">
+              <span>Chaves iniciais</span>
+              <input type="number" data-starting-keys min="1" max="9" step="1">
+            </label>
+          </div>
+          <label class="editor-field">
+            <span>Preço do coração</span>
+            <input type="number" data-shop-heart-cost min="1" max="99" step="1">
+          </label>
+          <div class="dungeon-map-host" data-dungeon-map>
+            <p class="field-help">O mapa aparecerá assim que a prévia iniciar.</p>
+          </div>
           <hr class="editor-divider">
           <h3>Histórico</h3>
           <p class="field-help">Até 75 mudanças podem ser desfeitas nesta sessão. Importar um projeto inicia um novo histórico.</p>
           <hr class="editor-divider">
           <h3>Colaboração</h3>
-          <p class="field-help">Exporte o gamepack, adicione-o à sua branch e envie um pull request. Nada é enviado automaticamente.</p>
+          <p class="field-help">Exporte o gamepack para enviá-lo ao colaborador. Quem tiver o repositório aplica o arquivo numa branch e abre um pull request. Nada é enviado automaticamente.</p>
         </aside>
 
         <section class="preview-workspace" aria-labelledby="preview-title">
@@ -435,7 +619,8 @@ function applicationTemplate(): string {
             </div>
           </div>
           <div class="game-preview" data-testid="game-preview" aria-label="Área do jogo"></div>
-          <div class="preview-metrics" aria-label="Estado da partida" aria-live="polite"></div>
+          <p class="preview-controls" id="preview-controls">Clique no jogo para controlar. WASD move e usa portas; setas atiram; Espaço interage na loja e após o chefe; Esc pausa; R reinicia.</p>
+          <div class="preview-metrics" aria-label="Estado da partida"></div>
         </section>
 
         <aside class="editor-panel editor-panel--inspector" aria-labelledby="inspector-title">
@@ -451,6 +636,17 @@ function applicationTemplate(): string {
             <label class="upload-button button-like" for="skin-input">Escolher PNG</label>
             <input class="sr-only" id="skin-input" data-testid="skin-upload" type="file" accept="image/png,.png">
             <p class="field-help">PNG de 8×8 a 512×512px, até 2 MB. A imagem fica somente no projeto.</p>
+            <label class="editor-field">
+              <span>Origem/licença da skin</span>
+              <select data-skin-license disabled>
+                <option value="unverified">Ainda não confirmada</option>
+                <option value="original">Criação própria</option>
+                <option value="cc0">CC0 / domínio público</option>
+                <option value="cc-by">CC BY</option>
+                <option value="cc-by-sa">CC BY-SA</option>
+              </select>
+              <small>Confirme a licença antes de tornar o repositório público.</small>
+            </label>
             <div class="field-row">
               <label class="editor-field">
                 <span>Cor principal</span>
@@ -505,6 +701,7 @@ function applicationTemplate(): string {
         <span data-status-text>Carregando projeto…</span>
         <span class="status-spacer"></span>
         <span class="save-state" data-save-state>Autosave local</span>
+        <a class="license-link" href="./THIRD_PARTY_NOTICES.txt" target="_blank" rel="noopener">Licenças</a>
       </footer>
     </div>
   `;
@@ -523,7 +720,14 @@ function collectElements(root: HTMLElement): EditorElements {
     enemyHealth: required(root, "[data-enemy-health]", "vida do inimigo"),
     enemySpeed: required(root, "[data-enemy-speed]", "velocidade do inimigo"),
     enemyDamage: required(root, "[data-enemy-damage]", "dano do inimigo"),
+    runEndless: required(root, "[data-run-endless]", "modo sem fim"),
+    floorLimit: required(root, "[data-floor-limit]", "quantidade de andares"),
+    roomsPerFloor: required(root, "[data-rooms-per-floor]", "salas por andar"),
+    startingCoins: required(root, "[data-starting-coins]", "moedas iniciais"),
+    startingKeys: required(root, "[data-starting-keys]", "chaves iniciais"),
+    shopHeartCost: required(root, "[data-shop-heart-cost]", "preço do coração"),
     skinUpload: required(root, "[data-testid='skin-upload']", "upload de skin"),
+    skinLicense: required(root, "[data-skin-license]", "licença da skin"),
     skinPreview: required(root, "[data-skin-preview]", "prévia da skin"),
     skinMetadata: required(root, "[data-skin-metadata]", "dados da skin"),
     undo: required(root, "[data-testid='undo']", "botão Desfazer"),
@@ -534,6 +738,7 @@ function collectElements(root: HTMLElement): EditorElements {
     exportProject: required(root, "[data-testid='export-project']", "exportar projeto"),
     importProject: required(root, "[data-testid='import-project']", "importar projeto"),
     preview: required(root, "[data-testid='game-preview']", "prévia do jogo"),
+    dungeonMap: required(root, "[data-dungeon-map]", "mapa da dungeon"),
     metrics: required(root, ".preview-metrics", "métricas da prévia"),
     previewStatus: required(root, "[data-preview-status]", "estado da prévia"),
     statusBar: required(root, "[data-testid='status']", "barra de estado"),
@@ -561,11 +766,20 @@ function renderSkin(
     const name = document.createElement("strong");
     name.textContent = skin.filename;
     metadata.append(name);
-    metadata.append(
+    const details = [
       skin.width && skin.height
         ? `${skin.width}×${skin.height}px`
         : "PNG personalizado",
+    ];
+    if (skin.bytes) {
+      details.push(formatBytes(skin.bytes));
+    }
+    details.push(
+      skin.license === "unverified"
+        ? "licença a confirmar"
+        : `licença ${skin.license}`,
     );
+    metadata.append(details.join(" · "));
     return;
   }
 
@@ -593,10 +807,12 @@ function renderPreviewMetrics(
 ): void {
   container.replaceChildren();
   const metrics = [
+    ["Andar", String(snapshot.floor)],
+    ["Sala", roomKindLabel(snapshot.roomKind)],
     ["Vida", `${snapshot.health}/${snapshot.maxHealth}`],
     ["Inimigos", String(snapshot.enemyCount)],
-    ["Projéteis", String(snapshot.projectileCount)],
-    ["Tempo", `${Math.floor(snapshot.elapsedTimeMs / 1000)}s`],
+    ["Moedas", String(snapshot.coins)],
+    ["Chaves", String(snapshot.keys)],
   ] as const;
 
   for (const [label, value] of metrics) {
@@ -607,6 +823,67 @@ function renderPreviewMetrics(
     item.append(strong);
     container.append(item);
   }
+}
+
+async function validateProjectSkin(project: GameProject): Promise<GameProject> {
+  const validated = await validateEmbeddedPngDataUrl(project.player.skinDataUrl);
+  const metadata = project.player.skinMetadata;
+
+  if (validated === null) {
+    if (metadata !== null) {
+      throw new Error("A skin possui metadados, mas a imagem está ausente.");
+    }
+    return project;
+  }
+
+  if (metadata === null) {
+    return {
+      ...project,
+      player: {
+        ...project.player,
+        skinMetadata: {
+          filename: "skin-importada.png",
+          width: validated.width,
+          height: validated.height,
+          bytes: validated.bytes,
+          sha256: validated.sha256,
+          origin: "user-upload",
+          license: "unverified",
+        },
+      },
+    };
+  }
+
+  if (
+    metadata.width !== validated.width ||
+    metadata.height !== validated.height ||
+    metadata.bytes !== validated.bytes ||
+    metadata.sha256 !== validated.sha256
+  ) {
+    throw new Error("A skin não corresponde aos metadados gravados no projeto.");
+  }
+  return project;
+}
+
+function roomKindLabel(kind: RoomKind): string {
+  switch (kind) {
+    case "start":
+      return "Início";
+    case "combat":
+      return "Combate";
+    case "treasure":
+      return "Tesouro";
+    case "shop":
+      return "Loja";
+    case "boss":
+      return "Chefe";
+  }
+}
+
+function formatBytes(bytes: number): string {
+  return bytes >= 1024 * 1024
+    ? `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
 function numberFromInput(input: HTMLInputElement): number {

@@ -18,13 +18,14 @@
     "noImplicitOverride": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "types": ["node", "vitest/globals"]
+    "types": ["node", "vite/client", "vitest/globals"]
   },
   "include": [
     "src",
     "vite.config.ts",
     "vitest.config.ts",
     "playwright.config.ts",
+    "scripts",
     "tests"
   ]
 }

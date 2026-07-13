@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EditorHistory } from "./history";
 
 describe("EditorHistory", () => {
@@ -36,5 +36,32 @@ describe("EditorHistory", () => {
     expect(history.undo().present).toBe(2);
     expect(history.undo().present).toBe(1);
     expect(history.undo().present).toBe(1);
+  });
+
+  it("permite preservar um payload grande com uma estratégia de clone", () => {
+    const immutableSkin = Object.freeze({
+      dataUrl: `data:image/png;base64,${"A".repeat(250_000)}`,
+    });
+    const clone = vi.fn(
+      (revision: { name: string; skin: typeof immutableSkin; mutable: { value: number } }) => ({
+        ...revision,
+        skin: revision.skin,
+        mutable: { ...revision.mutable },
+      }),
+    );
+    const history = new EditorHistory(
+      { name: "Original", skin: immutableSkin, mutable: { value: 1 } },
+      10,
+      clone,
+    );
+
+    history.push({ name: "Nova", skin: immutableSkin, mutable: { value: 2 } });
+    const undone = history.undo();
+    undone.present.mutable.value = 99;
+
+    const snapshot = history.snapshot;
+    expect(snapshot.present.skin).toBe(immutableSkin);
+    expect(snapshot.present.mutable.value).toBe(1);
+    expect(clone).toHaveBeenCalled();
   });
 });

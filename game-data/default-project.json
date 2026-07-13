@@ -7,6 +7,7 @@
     "color": "#8aa2ff",
     "accentColor": "#ffd166",
     "skinDataUrl": null,
+    "skinMetadata": null,
     "maxHealth": 6,
     "speed": 220,
     "radius": 18,
@@ -22,6 +23,14 @@
     "spawnCount": 4,
     "contactDamage": 1,
     "dropChance": 0.35
+  },
+  "run": {
+    "endless": false,
+    "floorLimit": 3,
+    "roomsPerFloor": 9,
+    "startingCoins": 0,
+    "startingKeys": 1,
+    "shopHeartCost": 3
   },
   "world": {
     "width": 960,

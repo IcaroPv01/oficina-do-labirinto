@@ -18,6 +18,14 @@ describe("project adapter", () => {
         speed: 90,
         damage: 2,
       },
+      run: {
+        endless: true,
+        floorLimit: 5,
+        roomsPerFloor: 12,
+        startingCoins: 4,
+        startingKeys: 2,
+        shopHeartCost: 6,
+      },
     });
 
     const valid = parseGameProject(patched);
@@ -36,6 +44,14 @@ describe("project adapter", () => {
         speed: 90,
         damage: 2,
       },
+      run: {
+        endless: true,
+        floorLimit: 5,
+        roomsPerFloor: 12,
+        startingCoins: 4,
+        startingKeys: 2,
+        shopHeartCost: 6,
+      },
     });
   });
 
@@ -47,10 +63,26 @@ describe("project adapter", () => {
         width: 32,
         height: 32,
         bytes: 8,
+        sha256: "a".repeat(64),
       },
     });
 
     const fields = readEditorProject(parseGameProject(patched));
     expect(fields.playerSkin?.dataUrl).toBe("data:image/png;base64,iVBORw0KGgo=");
+    expect(fields.playerSkin).toMatchObject({
+      filename: "heroi.png",
+      width: 32,
+      height: 32,
+      bytes: 8,
+      sha256: "a".repeat(64),
+      license: "unverified",
+    });
+
+    const licensed = patchEditorProject(parseGameProject(patched), {
+      playerSkinLicense: "original",
+    });
+    expect(readEditorProject(parseGameProject(licensed)).playerSkin?.license).toBe(
+      "original",
+    );
   });
 });

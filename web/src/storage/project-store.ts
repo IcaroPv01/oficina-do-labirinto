@@ -15,7 +15,27 @@ interface EditorDatabase extends DBSchema {
 
 const DATABASE_NAME = "jogo-colaborativo-editor";
 const DATABASE_VERSION = 1;
-const AUTOSAVE_KEY = "current-project";
+const LEGACY_AUTOSAVE_KEY = "current-project";
+
+function normalizeBasePath(basePath: string): string {
+  let pathname = basePath.trim().replaceAll("\\", "/");
+  try {
+    pathname = new URL(pathname || "/", "https://jogo.local").pathname;
+  } catch {
+    pathname = "/";
+  }
+
+  const segments = pathname.split("/").filter(Boolean);
+  return segments.length === 0 ? "/" : `/${segments.join("/")}/`;
+}
+
+/** Keeps autosaves from different GitHub Pages repositories isolated by base path. */
+export function createAutosaveKey(basePath: string): string {
+  return `${LEGACY_AUTOSAVE_KEY}:${encodeURIComponent(normalizeBasePath(basePath))}`;
+}
+
+const APPLICATION_BASE_PATH = normalizeBasePath(import.meta.env.BASE_URL);
+const AUTOSAVE_KEY = createAutosaveKey(APPLICATION_BASE_PATH);
 
 let databasePromise: Promise<IDBPDatabase<EditorDatabase>> | undefined;
 
@@ -44,16 +64,39 @@ export interface StoredProjectResult<T> {
 
 export async function loadAutosave<T>(): Promise<StoredProjectResult<T> | null> {
   const database = await openEditorDatabase();
-  const stored = await database.get("projects", AUTOSAVE_KEY);
+  let stored = await database.get("projects", AUTOSAVE_KEY);
+
+  // The original prototype used a global key. Migrate it only at the root base;
+  // copying it into every Pages repository would recreate the collision.
+  if (!stored && APPLICATION_BASE_PATH === "/") {
+    const legacy = await database.get("projects", LEGACY_AUTOSAVE_KEY);
+    if (legacy) {
+      stored = { ...legacy, key: AUTOSAVE_KEY };
+      await database.put("projects", stored);
+    }
+  }
 
   if (!stored) {
     return null;
   }
 
+  const updatedAt = parseStoredDate(stored.updatedAt);
   return {
     project: structuredClone(stored.project) as T,
-    updatedAt: new Date(stored.updatedAt),
+    updatedAt,
   };
+}
+
+function parseStoredDate(value: unknown): Date {
+  if (typeof value !== "string") {
+    throw new Error("O autosave local contém uma data de atualização inválida.");
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime()) || date.toISOString() !== value) {
+    throw new Error("O autosave local contém uma data de atualização inválida.");
+  }
+  return date;
 }
 
 export async function saveAutosave<T>(project: T): Promise<Date> {

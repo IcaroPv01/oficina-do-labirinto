@@ -4,54 +4,68 @@ export interface HistorySnapshot<T> {
   readonly canRedo: boolean;
 }
 
+export type HistoryCloneStrategy<T> = (value: T) => T;
+
+function cloneWithStructuredClone<T>(value: T): T {
+  return structuredClone(value);
+}
+
 /**
  * Immutable undo/redo history. Values are cloned at the boundary so callers
- * cannot accidentally mutate a past revision.
+ * cannot accidentally mutate a past revision. Callers that keep large,
+ * immutable payloads may provide a clone strategy that preserves those
+ * payloads by reference while still copying the mutable project structure.
  */
 export class EditorHistory<T> {
   readonly #limit: number;
+  readonly #clone: HistoryCloneStrategy<T>;
   #past: T[] = [];
   #present: T;
   #future: T[] = [];
 
-  constructor(initialValue: T, limit = 50) {
+  constructor(
+    initialValue: T,
+    limit = 50,
+    clone: HistoryCloneStrategy<T> = cloneWithStructuredClone,
+  ) {
     if (!Number.isInteger(limit) || limit < 1) {
       throw new Error("O limite do histórico deve ser um inteiro positivo.");
     }
 
     this.#limit = limit;
-    this.#present = structuredClone(initialValue);
+    this.#clone = clone;
+    this.#present = this.#clone(initialValue);
   }
 
   get snapshot(): HistorySnapshot<T> {
     return {
-      present: structuredClone(this.#present),
+      present: this.#clone(this.#present),
       canUndo: this.#past.length > 0,
       canRedo: this.#future.length > 0,
     };
   }
 
   push(nextValue: T): HistorySnapshot<T> {
-    this.#past.push(structuredClone(this.#present));
+    this.#past.push(this.#clone(this.#present));
 
     if (this.#past.length > this.#limit) {
       this.#past.shift();
     }
 
-    this.#present = structuredClone(nextValue);
+    this.#present = this.#clone(nextValue);
     this.#future = [];
     return this.snapshot;
   }
 
   replace(nextValue: T): HistorySnapshot<T> {
-    this.#present = structuredClone(nextValue);
+    this.#present = this.#clone(nextValue);
     return this.snapshot;
   }
 
   reset(nextValue: T): HistorySnapshot<T> {
     this.#past = [];
     this.#future = [];
-    this.#present = structuredClone(nextValue);
+    this.#present = this.#clone(nextValue);
     return this.snapshot;
   }
 
@@ -62,7 +76,7 @@ export class EditorHistory<T> {
       return this.snapshot;
     }
 
-    this.#future.push(structuredClone(this.#present));
+    this.#future.push(this.#clone(this.#present));
     this.#present = previous;
     return this.snapshot;
   }
@@ -74,7 +88,7 @@ export class EditorHistory<T> {
       return this.snapshot;
     }
 
-    this.#past.push(structuredClone(this.#present));
+    this.#past.push(this.#clone(this.#present));
     this.#present = next;
     return this.snapshot;
   }
