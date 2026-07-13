@@ -1,0 +1,48 @@
+# Local backups and assistant/tool state
+.local-backups/
+.gemini/
+.antigravity/
+
+# Python legacy environment and generated output
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Third-party checkouts kept only as local references
+repos/
+
+# Legacy assets with provenance still under review
+assets/
+mods/
+
+# Generated review captures
+/debug_*.png
+/hover_*.png
+/menu_*.png
+/screenshot_*.png
+
+# Web dependencies and generated output
+node_modules/
+web/node_modules/
+web/dist/
+coverage/
+playwright-report/
+test-results/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mod Engine - Web Edition</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="logo"></div>
+                <h2>Mega Engine</h2>
+            </div>
+            <nav>
+                <button class="nav-btn active" data-tab="skins">
+                    <span class="icon">👤</span> Galeria de Skins
+                </button>
+                <button class="nav-btn" data-tab="events">
+                    <span class="icon">⚡</span> Eventos (No-Code)
+                </button>
+            </nav>
+            <div class="bottom-actions">
+                <button id="btn-play" class="play-btn">
+                    ▶ Play Game
+                </button>
+            </div>
+        </aside>
+
+        <!-- MAIN CONTENT -->
+        <main class="content">
+            
+            <!-- SKINS TAB -->
+            <section id="tab-skins" class="tab-pane active">
+                <header class="tab-header">
+                    <h1>Skins do Jogador</h1>
+                    <p>Altere a aparência do seu herói ou corrija arte gerada por IA.</p>
+                </header>
+                
+                <div class="gallery-container">
+                    <div class="gallery-grid" id="skins-grid">
+                        <!-- Imagens injetadas via JS -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- EVENTS TAB -->
+            <section id="tab-events" class="tab-pane">
+                <header class="tab-header">
+                    <h1>Lógica Visual</h1>
+                    <p>Defina as regras usando a arquitetura GDevelop (JSON).</p>
+                </header>
+                
+                <div class="editor-container">
+                    <textarea id="events-editor" spellcheck="false"></textarea>
+                    <div class="editor-actions">
+                        <button id="btn-save-events" class="action-btn primary">
+                            Injetar Lógica no Pygame
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast">Notificação</div>
+
+    <script src="{{ url_for('static', filename='main.js') }}"></script>
+</body>
+</html>
