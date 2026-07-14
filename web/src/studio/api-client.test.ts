@@ -3,6 +3,7 @@ import {
   createStudioFetchTransport,
   createStudioServerApiClient,
   normalizeStudioServerUrl,
+  StudioApiError,
   type StudioTransport,
   type StudioTransportRequest,
 } from "./api-client";
@@ -155,6 +156,307 @@ describe("createStudioServerApiClient", () => {
     });
   });
 
+  it("transforma um candidato aceito em rascunho e depois o marca para teste", async () => {
+    const requests: StudioTransportRequest[] = [];
+    const draft = studioDraftChangeSet();
+    const proposed = {
+      ...draft,
+      status: "proposed" as const,
+      candidateRevision: {
+        ...draft.baseRevision,
+        revisionId: "candidate-ready-1",
+        parentRevisionId: draft.baseRevision.revisionId,
+        sequence: draft.baseRevision.sequence + 1,
+        digest: "d".repeat(64),
+      },
+      operations: [
+        {
+          operationId: "operation-ready-speed",
+          kind: "player.set-tuning" as const,
+          explanation: "Aumenta a velocidade dentro do limite.",
+          tuning: { speed: 240 },
+        },
+      ],
+    };
+    const client = createStudioServerApiClient({
+      baseUrl: new URL("https://studio.example"),
+      setCsrfToken() {},
+      async send<Response>(request: StudioTransportRequest): Promise<Response> {
+        requests.push(request);
+        return {
+          changeSet: request.path.endsWith("/ready") ? proposed : draft,
+        } as Response;
+      },
+    });
+    const input = {
+      title: "Herói mais rápido",
+      explanation: "Candidato aceito pelo usuário, ainda não aplicado.",
+      operations: proposed.operations,
+    };
+
+    await client.createChangeSet("project-main", input);
+    await client.markChangeSetReady(
+      "project-main",
+      draft.changeSetId,
+      "Pronta para o sandbox.",
+    );
+
+    expect(requests).toEqual([
+      {
+        method: "POST",
+        path: "/api/projects/project-main/change-sets",
+        body: input,
+        requiresCsrf: true,
+      },
+      {
+        method: "POST",
+        path: `/api/projects/project-main/change-sets/${draft.changeSetId}/ready`,
+        body: { explanation: "Pronta para o sandbox." },
+        requiresCsrf: true,
+      },
+    ]);
+  });
+
+  it("coloca a proposta em teste e registra evidência para a revisão exata", async () => {
+    const requests: StudioTransportRequest[] = [];
+    const candidate = testingChangeSet();
+    const transport: StudioTransport = {
+      baseUrl: new URL("https://studio.example"),
+      setCsrfToken() {},
+      async send<Response>(request: StudioTransportRequest): Promise<Response> {
+        requests.push(request);
+        if (request.path.endsWith("/testing")) {
+          return { changeSet: candidate } as Response;
+        }
+        const input = request.body as {
+          revisionId: string;
+          revisionDigest: string;
+          status: "passed";
+          checks: readonly [{ readonly name: string; readonly status: "passed"; readonly details: null }];
+          startedAt: string;
+          completedAt: string;
+        };
+        return {
+          changeSet: testingChangeSet({
+            testRunId: "test-run-001",
+            revisionId: input.revisionId,
+            revisionDigest: input.revisionDigest,
+            status: input.status,
+            checks: [
+              {
+                checkId: "check-movement",
+                name: input.checks[0].name,
+                status: input.checks[0].status,
+                details: input.checks[0].details,
+              },
+            ],
+            executedBy: candidate.author,
+            startedAt: input.startedAt,
+            completedAt: input.completedAt,
+          }),
+        } as Response;
+      },
+    };
+    const client = createStudioServerApiClient(transport);
+    const revision = candidate.candidateRevision;
+    if (!revision) throw new Error("Fixture sem revisão candidata.");
+    const testInput = {
+      revisionId: revision.revisionId,
+      revisionDigest: revision.digest,
+      status: "passed" as const,
+      checks: [{ name: "Movimento e colisão", status: "passed" as const, details: null }],
+      startedAt: "2026-07-13T12:01:00.000Z",
+      completedAt: "2026-07-13T12:01:01.000Z",
+    };
+
+    await client.markChangeSetTesting("project/main", "change/main", "Iniciar teste seguro.");
+    const updated = await client.recordSandboxTest("project/main", "change/main", testInput);
+
+    expect(requests).toEqual([
+      {
+        method: "POST",
+        path: "/api/projects/project%2Fmain/change-sets/change%2Fmain/testing",
+        body: { explanation: "Iniciar teste seguro." },
+        requiresCsrf: true,
+      },
+      {
+        method: "POST",
+        path: "/api/projects/project%2Fmain/change-sets/change%2Fmain/tests",
+        body: testInput,
+        requiresCsrf: true,
+      },
+    ]);
+    expect(updated.latestTest).toMatchObject({
+      revisionId: revision.revisionId,
+      revisionDigest: revision.digest,
+    });
+  });
+
+  it("limita checks antes da rede e preserva conflito de revisão do servidor", async () => {
+    let calls = 0;
+    const conflictTransport: StudioTransport = {
+      baseUrl: new URL("https://studio.example"),
+      setCsrfToken() {},
+      async send<Response>(): Promise<Response> {
+        calls += 1;
+        throw new StudioApiError(
+          409,
+          "candidate_mismatch",
+          "A revisão informada não é a candidata atual",
+        );
+      },
+    };
+    const client = createStudioServerApiClient(conflictTransport);
+    const commonInput = {
+      revisionId: "revision-candidate",
+      revisionDigest: "b".repeat(64),
+      status: "passed" as const,
+      startedAt: "2026-07-13T12:01:00.000Z",
+      completedAt: "2026-07-13T12:01:01.000Z",
+    };
+
+    await expect(
+      client.recordSandboxTest("project", "change", {
+        ...commonInput,
+        checks: Array.from({ length: 65 }, (_, index) => ({
+          checkId: `check-${index}`,
+          name: `Check ${index}`,
+          status: "passed" as const,
+          details: null,
+        })),
+      }),
+    ).rejects.toMatchObject({ code: "invalid_sandbox_test_input", status: 400 });
+    expect(calls).toBe(0);
+
+    await expect(
+      client.recordSandboxTest("project", "change", {
+        ...commonInput,
+        checks: [{ name: "Movimento", status: "passed", details: null }],
+      }),
+    ).rejects.toMatchObject({
+      code: "candidate_mismatch",
+      status: 409,
+      message: "A revisão informada não é a candidata atual",
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("rejeita evidência que o servidor vinculou a outra revisão", async () => {
+    const client = createStudioServerApiClient({
+      baseUrl: new URL("https://studio.example"),
+      setCsrfToken() {},
+      async send<Response>(): Promise<Response> {
+        const candidate = testingChangeSet();
+        const revision = candidate.candidateRevision;
+        if (!revision) throw new Error("Fixture sem revisão candidata.");
+        return {
+          changeSet: testingChangeSet({
+            testRunId: "test-run-other",
+            revisionId: revision.revisionId,
+            revisionDigest: revision.digest,
+            status: "passed",
+            checks: [{ checkId: "check-other", name: "Outro", status: "passed", details: null }],
+            executedBy: candidate.author,
+            startedAt: "2026-07-13T12:01:00.000Z",
+            completedAt: "2026-07-13T12:01:01.000Z",
+          }),
+        } as Response;
+      },
+    });
+
+    await expect(
+      client.recordSandboxTest("project", "change", {
+        revisionId: "revision-requested",
+        revisionDigest: "c".repeat(64),
+        status: "passed",
+        checks: [{ name: "Movimento", status: "passed", details: null }],
+        startedAt: "2026-07-13T12:01:00.000Z",
+        completedAt: "2026-07-13T12:01:01.000Z",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_test_binding_response", status: 502 });
+  });
+
+  it("aceita somente candidato de IA estruturado e nunca aplicado", async () => {
+    const requests: StudioTransportRequest[] = [];
+    const client = createStudioServerApiClient({
+      baseUrl: new URL("https://studio.example"),
+      setCsrfToken() {},
+      async send<Response>(request: StudioTransportRequest): Promise<Response> {
+        requests.push(request);
+        return {
+          mode: "proposal",
+          applied: false,
+          proposalId: "ai-proposal-001",
+          projectId: "project-main",
+          createdAt: "2026-07-13T12:00:00.000Z",
+          promptDigest: "a".repeat(64),
+          author: { id: "user-owner", displayName: "Owner", role: "owner" },
+          provider: "verboo-code",
+          model: "model-safe",
+          requestId: "request-001",
+          candidate: {
+            title: "Ajustar velocidade",
+            explanation: "Mudança pequena para teste.",
+            risks: ["Pode alterar o ritmo do jogo."],
+            operations: [
+              {
+                operationId: "operation-speed",
+                kind: "player.set-tuning",
+                explanation: "Aumenta a velocidade dentro do limite.",
+                tuning: { speed: 220 },
+              },
+            ],
+          },
+        } as Response;
+      },
+    });
+
+    const proposal = await client.proposeChangeWithAi(
+      "project-main",
+      "Aumente um pouco a velocidade.",
+      "model-safe",
+    );
+
+    expect(proposal.candidate.operations[0]?.kind).toBe("player.set-tuning");
+    expect(proposal.proposalId).toBe("ai-proposal-001");
+    expect(requests[0]).toEqual({
+      method: "POST",
+      path: "/api/ai/propose",
+      body: { projectId: "project-main", prompt: "Aumente um pouco a velocidade.", model: "model-safe" },
+      requiresCsrf: true,
+    });
+  });
+
+  it("rejeita operação arbitrária retornada pela IA", async () => {
+    const client = createStudioServerApiClient({
+      baseUrl: new URL("https://studio.example"),
+      setCsrfToken() {},
+      async send<Response>(): Promise<Response> {
+        return {
+          mode: "proposal",
+          applied: false,
+          proposalId: "ai-proposal-unsafe",
+          projectId: "project-main",
+          createdAt: "2026-07-13T12:00:00.000Z",
+          promptDigest: "b".repeat(64),
+          author: { id: "user-owner", displayName: "Owner", role: "owner" },
+          provider: "verboo-code",
+          model: "model-safe",
+          requestId: null,
+          candidate: {
+            title: "Código livre",
+            explanation: "Não pode passar pelo contrato.",
+            risks: ["Executaria código arbitrário."],
+            operations: [{ operationId: "unsafe-operation", kind: "code.run", script: "doSomething()" }],
+          },
+        } as Response;
+      },
+    });
+
+    await expect(client.proposeChangeWithAi("project-main", "Execute código", "model-safe"))
+      .rejects.toMatchObject({ code: "invalid_ai_proposal_response", status: 502 });
+  });
+
   it("rejeita proposta HTTP que não cumpre o contrato compartilhado", async () => {
     const transport: StudioTransport = {
       baseUrl: new URL("https://studio.example"),
@@ -188,5 +490,30 @@ function mockTransport(requests: StudioTransportRequest[]): StudioTransport {
       }
       return {} as Response;
     },
+  };
+}
+
+function testingChangeSet(latestTest: unknown = null) {
+  const draft = studioDraftChangeSet();
+  return {
+    ...draft,
+    status: "testing" as const,
+    candidateRevision: {
+      ...draft.baseRevision,
+      revisionId: "revision-candidate",
+      parentRevisionId: draft.baseRevision.revisionId,
+      sequence: 1,
+      digest: "b".repeat(64),
+      contentBytes: 128,
+    },
+    operations: [
+      {
+        operationId: "operation-speed",
+        kind: "player.set-tuning" as const,
+        explanation: "Ajusta a velocidade dentro do limite.",
+        tuning: { speed: 220 },
+      },
+    ],
+    latestTest,
   };
 }

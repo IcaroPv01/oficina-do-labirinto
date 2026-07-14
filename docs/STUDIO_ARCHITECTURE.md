@@ -136,6 +136,13 @@ Modos previstos:
 Mesmo sem custo por token no plano atual, o servidor impõe limites técnicos de
 tamanho, duração e frequência para manter o computador responsivo.
 
+Na integração atual, a Verboo aceita `json_object`, mas rejeita o formato
+`json_schema`. Por isso o mesmo schema é enviado como instrução e a resposta
+continua não confiável até passar pela validação Zod local. O servidor registra
+um `proposalId`, autor, data, modelo, request ID, riscos e somente o SHA-256 do
+prompt. O prompt bruto e a chave não entram na resposta, no log ou no SQLite.
+Adicionar a candidata cria apenas um change set em rascunho ligado a esse ID.
+
 ### Comportamentos de inimigos
 
 A primeira versão usa uma linguagem declarativa limitada, com ações como
@@ -156,6 +163,13 @@ simples (recorte, transparência, remoção de cor e redimensionamento pixel-art
 O sandbox recebe uma cópia imutável da revisão candidata. Ele valida schemas,
 referências, comportamentos, assets e limites antes de abrir o preview Phaser.
 O preview deixa claro que executa um candidato e permite comparar antes/depois.
+
+A implementação do navegador limita a simulação automática a 600 passos, dez
+segundos e 64 entidades, executa duas vezes para detectar não determinismo e
+exige confirmação manual da prévia jogável. O Phaser é montado uma vez num host
+estável e pausado quando a vista mobile sai do Sandbox. Em celular, o teste usa
+os onze controles reais do jogo, inclusive movimento e tiro simultâneos; não
+existe uma maquete separada que possa aprovar algo que não foi jogado.
 
 O botão **Aprovar para o jogo** é exclusivo do dono e aprova o digest exato já
 testado. A promoção futura cria uma branch e um pull request com uma GitHub App

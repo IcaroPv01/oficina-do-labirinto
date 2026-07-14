@@ -2,6 +2,8 @@ import "./studio.css";
 import { formatContextWindow } from "./assistant-models";
 import type {
   StudioApprovalControlState,
+  StudioAssistantMode,
+  StudioAssistantProposalStatus,
   StudioBottomPanelTab,
   StudioComparisonTarget,
   StudioLayoutPreference,
@@ -10,7 +12,8 @@ import type {
   StudioProposalStatus,
   StudioResolvedLayout,
   StudioRightPanelTab,
-  StudioSandboxControl,
+  StudioSandboxCheckStatus,
+  StudioSandboxPreviewState,
   StudioShellHandle,
   StudioShellModel,
   StudioShellOptions,
@@ -24,7 +27,8 @@ export interface StudioLayoutSignals {
 
 interface StudioComposerDrafts {
   chat: string;
-  assistant: string;
+  assistantAsk: string;
+  assistantPropose: string;
 }
 
 const RIGHT_TABS = [
@@ -78,6 +82,34 @@ const CONNECTION = {
   offline: { label: "Offline", tone: "neutral" },
   conflict: { label: "Conflito de sincronização", tone: "error" },
 } as const;
+
+const SANDBOX_PREVIEW_STATE = {
+  preparing: { label: "Preparando", tone: "warning", icon: "…" },
+  ready: { label: "Pronto", tone: "success", icon: "✓" },
+  testing: { label: "Testando", tone: "warning", icon: "↻" },
+  failed: { label: "Falhou", tone: "error", icon: "!" },
+} as const satisfies Record<
+  StudioSandboxPreviewState,
+  { readonly label: string; readonly tone: string; readonly icon: string }
+>;
+
+const SANDBOX_CHECK_STATUS = {
+  pending: { label: "Pendente", icon: "○" },
+  passed: { label: "Passou", icon: "✓" },
+  failed: { label: "Falhou", icon: "!" },
+} as const satisfies Record<
+  StudioSandboxCheckStatus,
+  { readonly label: string; readonly icon: string }
+>;
+
+const ASSISTANT_PROPOSAL_STATUS = {
+  preparing: { label: "Preparando", tone: "warning" },
+  ready: { label: "Pronta para revisão", tone: "success" },
+  failed: { label: "Falhou", tone: "error" },
+} as const satisfies Record<
+  StudioAssistantProposalStatus,
+  { readonly label: string; readonly tone: string }
+>;
 
 let shellSequence = 0;
 
@@ -208,7 +240,18 @@ export function createStudioShell(
 
   let model = initialModel;
   let destroyed = false;
-  const drafts: StudioComposerDrafts = { chat: "", assistant: "" };
+  let assistantMode: StudioAssistantMode = "ask";
+  const drafts: StudioComposerDrafts = {
+    chat: "",
+    assistantAsk: "",
+    assistantPropose: "",
+  };
+  const sandboxPreviewHost = element(
+    document,
+    "div",
+    "studio-preview__game-host",
+  );
+  sandboxPreviewHost.dataset.studioPreviewHost = "game";
 
   const selectProposal = (proposalId: string): void => {
     const proposal = model.proposals.find((item) => item.id === proposalId);
@@ -241,6 +284,11 @@ export function createStudioShell(
     model = { ...model, rightPanelTab: tab };
     render(`${idPrefix}-right-tab-${tab}`);
     options.onRightPanelChange?.(tab);
+  };
+
+  const selectAssistantMode = (mode: StudioAssistantMode): void => {
+    assistantMode = mode;
+    render(`${idPrefix}-assistant-mode-${mode}`);
   };
 
   const selectBottomTab = (tab: StudioBottomPanelTab): void => {
@@ -298,6 +346,9 @@ export function createStudioShell(
         model,
         options,
         drafts,
+        assistantMode,
+        selectAssistantMode,
+        sandboxPreviewHost,
         selectProposal,
         selectComparison,
         selectRightTab,
@@ -330,6 +381,7 @@ export function createStudioShell(
   );
 
   return {
+    sandboxPreviewHost,
     update(nextModel) {
       if (destroyed) {
         return;
@@ -490,6 +542,9 @@ function createMainLayout(
   model: StudioShellModel,
   options: StudioShellOptions,
   drafts: StudioComposerDrafts,
+  assistantMode: StudioAssistantMode,
+  onAssistantModeChange: (mode: StudioAssistantMode) => void,
+  sandboxPreviewHost: HTMLElement,
   onSelectProposal: (proposalId: string) => void,
   onComparisonChange: (target: StudioComparisonTarget) => void,
   onRightPanelChange: (tab: StudioRightPanelTab) => void,
@@ -497,13 +552,22 @@ function createMainLayout(
   const main = element(document, "main", "studio-main");
   main.append(
     createSidebar(document, model, onSelectProposal),
-    createWorkspace(document, idPrefix, model, options, onComparisonChange),
+    createWorkspace(
+      document,
+      idPrefix,
+      model,
+      options,
+      sandboxPreviewHost,
+      onComparisonChange,
+    ),
     createRightPanel(
       document,
       idPrefix,
       model,
       options,
       drafts,
+      assistantMode,
+      onAssistantModeChange,
       onRightPanelChange,
     ),
   );
@@ -645,6 +709,7 @@ function createWorkspace(
   idPrefix: string,
   model: StudioShellModel,
   options: StudioShellOptions,
+  sandboxPreviewHost: HTMLElement,
   onComparisonChange: (target: StudioComparisonTarget) => void,
 ): HTMLElement {
   const workspace = element(document, "section", "studio-workspace");
@@ -671,53 +736,38 @@ function createWorkspace(
     createComparisonSelector(
       document,
       idPrefix,
-      Boolean(selected),
+      model,
+      selected?.title ?? null,
       comparisonTarget,
       onComparisonChange,
     ),
   );
 
-  const preview = element(document, "div", "studio-preview");
-  preview.dataset.studioPreviewSlot = comparisonTarget;
-  preview.setAttribute("role", "region");
-  preview.setAttribute("tabindex", "0");
-  preview.setAttribute(
-    "aria-label",
-    comparisonTarget === "current"
-      ? `Prévia da versão publicada ${model.publishedVersion}`
-      : `Prévia da proposta ${selected?.title ?? "não selecionada"}`,
+  const preview = createSandboxPreviewSurface(
+    document,
+    idPrefix,
+    model,
+    comparisonTarget,
+    selected?.title ?? null,
+    sandboxPreviewHost,
   );
-  const previewContent = element(document, "div", "studio-preview__placeholder");
-  previewContent.append(
-    element(document, "span", "studio-preview__icon", "▶"),
-    element(
-      document,
-      "strong",
-      undefined,
-      comparisonTarget === "current"
-        ? `Jogo atual · ${model.publishedVersion}`
-        : selected?.title ?? "Candidata indisponível",
-    ),
-    element(
-      document,
-      "p",
-      undefined,
-      "Área reservada para o runtime Phaser ser montado de forma lazy.",
-    ),
+  const testEvidence = createSandboxTestEvidence(
+    document,
+    idPrefix,
+    model,
+    comparisonTarget,
+    options,
   );
-  preview.append(previewContent);
-
-  const touchControls = createTouchControls(document, options);
-
   const approval = createApprovalArea(document, idPrefix, model, options);
-  workspace.append(heading, preview, touchControls, approval);
+  workspace.append(heading, preview, testEvidence, approval);
   return workspace;
 }
 
 function createComparisonSelector(
   document: Document,
   idPrefix: string,
-  hasCandidate: boolean,
+  model: StudioShellModel,
+  candidateTitle: string | null,
   comparisonTarget: StudioComparisonTarget,
   onComparisonChange: (target: StudioComparisonTarget) => void,
 ): HTMLElement {
@@ -729,6 +779,7 @@ function createComparisonSelector(
       `${idPrefix}-comparison-current`,
       "current",
       "Jogo atual",
+      model.publishedVersion,
       comparisonTarget === "current",
       false,
       onComparisonChange,
@@ -738,12 +789,224 @@ function createComparisonSelector(
       `${idPrefix}-comparison-candidate`,
       "candidate",
       "Candidata",
+      candidateTitle ?? "Nenhuma proposta selecionada",
       comparisonTarget === "candidate",
-      !hasCandidate,
+      candidateTitle === null,
       onComparisonChange,
     ),
   );
   return fieldset;
+}
+
+function createSandboxPreviewSurface(
+  document: Document,
+  idPrefix: string,
+  model: StudioShellModel,
+  comparisonTarget: StudioComparisonTarget,
+  candidateTitle: string | null,
+  sandboxPreviewHost: HTMLElement,
+): HTMLElement {
+  const isCandidate = comparisonTarget === "candidate";
+  const displayedPreviewState = isCandidate
+    ? model.sandbox.previewState
+    : "ready";
+  const displayedStatusMessage = isCandidate
+    ? model.sandbox.statusMessage
+    : `A versão publicada ${model.publishedVersion} está pronta para jogar.`;
+  const previewState = SANDBOX_PREVIEW_STATE[displayedPreviewState];
+  const preview = element(document, "section", "studio-preview");
+  preview.dataset.studioPreviewSlot = comparisonTarget;
+  preview.dataset.previewState = displayedPreviewState;
+  preview.setAttribute("role", "region");
+  preview.setAttribute(
+    "aria-label",
+    isCandidate
+      ? `Jogo executável da proposta ${candidateTitle ?? "não selecionada"}`
+      : `Jogo executável da versão atual ${model.publishedVersion}`,
+  );
+
+  const toolbar = element(document, "div", "studio-preview__toolbar");
+  const identity = element(document, "div", "studio-preview__identity");
+  const revisionBadge = element(
+    document,
+    "span",
+    "studio-preview__revision-badge",
+    isCandidate ? "CANDIDATA" : "ATUAL",
+  );
+  revisionBadge.dataset.target = comparisonTarget;
+  identity.append(
+    revisionBadge,
+    element(
+      document,
+      "strong",
+      undefined,
+      isCandidate
+        ? candidateTitle ?? "Candidata indisponível"
+        : model.publishedVersion,
+    ),
+  );
+
+  const status = element(document, "span", "studio-preview__status");
+  status.id = `${idPrefix}-sandbox-status`;
+  status.dataset.tone = previewState.tone;
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  status.append(
+    element(
+      document,
+      "span",
+      "studio-preview__status-icon",
+      previewState.icon,
+    ),
+    element(document, "span", undefined, previewState.label),
+  );
+  toolbar.append(identity, status);
+
+  const viewport = element(document, "div", "studio-preview__viewport");
+  sandboxPreviewHost.setAttribute(
+    "aria-label",
+    isCandidate ? "Jogar versão candidata" : "Jogar versão atual",
+  );
+  viewport.append(sandboxPreviewHost);
+
+  if (
+    displayedPreviewState === "preparing" ||
+    displayedPreviewState === "failed"
+  ) {
+    const notice = element(document, "div", "studio-preview__notice");
+    notice.dataset.tone = previewState.tone;
+    notice.append(
+      element(document, "strong", undefined, previewState.label),
+      element(document, "p", undefined, displayedStatusMessage),
+    );
+    viewport.append(notice);
+  }
+
+  const description = element(
+    document,
+    "p",
+    "studio-preview__description",
+    displayedStatusMessage,
+  );
+  preview.append(toolbar, viewport, description);
+  return preview;
+}
+
+function createSandboxTestEvidence(
+  document: Document,
+  idPrefix: string,
+  model: StudioShellModel,
+  comparisonTarget: StudioComparisonTarget,
+  options: StudioShellOptions,
+): HTMLElement {
+  const selected = selectedProposal(model);
+  const candidateRevisionId = model.approval.candidateRevisionId;
+  const isCandidate = comparisonTarget === "candidate";
+  const isBusy =
+    model.sandbox.previewState === "preparing" ||
+    model.sandbox.previewState === "testing";
+  const canRunTest = Boolean(
+    isCandidate &&
+      selected &&
+      candidateRevisionId &&
+      model.sandbox.canRunTest &&
+      !isBusy,
+  );
+
+  const section = element(document, "section", "studio-sandbox-test");
+  section.setAttribute("aria-labelledby", `${idPrefix}-sandbox-test-title`);
+  const heading = element(document, "div", "studio-sandbox-test__heading");
+  const headingText = element(document, "div");
+  const title = element(document, "h3", undefined, "Teste desta revisão");
+  title.id = `${idPrefix}-sandbox-test-title`;
+  headingText.append(
+    title,
+    element(
+      document,
+      "p",
+      undefined,
+      isCandidate
+        ? "Jogue no preview e registre as evidências antes de aprovar."
+        : "Abra a candidata para executar e registrar um teste.",
+    ),
+  );
+
+  const runTest = element(
+    document,
+    "button",
+    "studio-sandbox-test__button",
+    model.sandbox.previewState === "testing"
+      ? "Testando…"
+      : model.sandbox.previewState === "failed"
+        ? "Registrar falha do teste"
+        : "Executar e registrar teste",
+  );
+  runTest.type = "button";
+  runTest.disabled = !canRunTest;
+  runTest.dataset.testid = "studio-run-sandbox-test";
+  runTest.setAttribute("aria-describedby", `${idPrefix}-sandbox-status`);
+  runTest.addEventListener("click", () => {
+    if (!canRunTest || !selected || !candidateRevisionId) {
+      return;
+    }
+    void options.onRunSandboxTest?.({
+      workspaceId: model.workspaceId,
+      proposalId: selected.id,
+      revisionId: candidateRevisionId,
+    });
+  });
+  heading.append(headingText, runTest);
+
+  const checklist = element(document, "ul", "studio-sandbox-checklist");
+  checklist.setAttribute("aria-label", "Evidências do teste da candidata");
+  if (model.sandbox.checklist.length === 0) {
+    checklist.append(
+      element(
+        document,
+        "li",
+        "studio-sandbox-checklist__empty",
+        "Nenhuma evidência registrada para esta revisão.",
+      ),
+    );
+  } else {
+    for (const check of model.sandbox.checklist) {
+      const metadata = SANDBOX_CHECK_STATUS[check.status];
+      const item = element(document, "li", "studio-sandbox-checklist__item");
+      item.dataset.status = check.status;
+      const icon = element(
+        document,
+        "span",
+        "studio-sandbox-checklist__icon",
+        metadata.icon,
+      );
+      icon.setAttribute("aria-hidden", "true");
+      const content = element(
+        document,
+        "span",
+        "studio-sandbox-checklist__content",
+      );
+      content.append(
+        element(document, "strong", undefined, check.label),
+        element(
+          document,
+          "small",
+          undefined,
+          check.detail ?? metadata.label,
+        ),
+      );
+      const accessibleStatus = element(
+        document,
+        "span",
+        "studio-sr-only",
+        `: ${metadata.label}`,
+      );
+      item.append(icon, content, accessibleStatus);
+      checklist.append(item);
+    }
+  }
+
+  section.append(heading, checklist);
+  return section;
 }
 
 function createMobileNavigation(
@@ -773,91 +1036,12 @@ function createMobileNavigation(
   return navigation;
 }
 
-function createTouchControls(
-  document: Document,
-  options: StudioShellOptions,
-): HTMLElement {
-  const controls = element(document, "div", "studio-touch-controls");
-  controls.setAttribute("aria-label", "Controles de toque do sandbox");
-
-  const movement = element(document, "div", "studio-touch-pad studio-touch-pad--movement");
-  movement.setAttribute("role", "group");
-  movement.setAttribute("aria-label", "Movimento");
-  movement.append(
-    createTouchButton(document, "move-up", "↑", "Mover para cima", options),
-    createTouchButton(document, "move-left", "←", "Mover para esquerda", options),
-    createTouchButton(document, "move-down", "↓", "Mover para baixo", options),
-    createTouchButton(document, "move-right", "→", "Mover para direita", options),
-  );
-
-  const actions = element(document, "div", "studio-touch-pad studio-touch-pad--actions");
-  actions.setAttribute("role", "group");
-  actions.setAttribute("aria-label", "Ações do jogo");
-  actions.append(
-    createTouchButton(document, "fire", "●", "Atirar", options),
-    createTouchButton(document, "action", "A", "Interagir", options),
-    createTouchButton(document, "pause", "Ⅱ", "Pausar", options),
-  );
-  controls.append(movement, actions);
-  return controls;
-}
-
-function createTouchButton(
-  document: Document,
-  control: StudioSandboxControl,
-  label: string,
-  ariaLabel: string,
-  options: StudioShellOptions,
-): HTMLButtonElement {
-  const button = element(document, "button", "studio-touch-button", label);
-  button.type = "button";
-  button.dataset.control = control;
-  button.setAttribute("aria-label", ariaLabel);
-  let pressed = false;
-  const start = (): void => {
-    if (pressed) {
-      return;
-    }
-    pressed = true;
-    button.dataset.pressed = "true";
-    options.onSandboxControl?.({ control, phase: "start" });
-  };
-  const end = (): void => {
-    if (!pressed) {
-      return;
-    }
-    pressed = false;
-    delete button.dataset.pressed;
-    options.onSandboxControl?.({ control, phase: "end" });
-  };
-  button.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    start();
-  });
-  button.addEventListener("pointerup", end);
-  button.addEventListener("pointercancel", end);
-  button.addEventListener("pointerleave", end);
-  button.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      start();
-    }
-  });
-  button.addEventListener("keyup", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      end();
-    }
-  });
-  button.addEventListener("blur", end);
-  return button;
-}
-
 function comparisonOption(
   document: Document,
   id: string,
   value: StudioComparisonTarget,
   label: string,
+  detail: string,
   checked: boolean,
   disabled: boolean,
   onChange: (target: StudioComparisonTarget) => void,
@@ -875,7 +1059,12 @@ function comparisonOption(
       onChange(value);
     }
   });
-  wrapper.append(input, element(document, "span", undefined, label));
+  const visibleLabel = element(document, "span");
+  visibleLabel.append(
+    element(document, "strong", undefined, label),
+    element(document, "small", undefined, detail),
+  );
+  wrapper.append(input, visibleLabel);
   return wrapper;
 }
 
@@ -926,6 +1115,8 @@ function createRightPanel(
   model: StudioShellModel,
   options: StudioShellOptions,
   drafts: StudioComposerDrafts,
+  assistantMode: StudioAssistantMode,
+  onAssistantModeChange: (mode: StudioAssistantMode) => void,
   onTabChange: (tab: StudioRightPanelTab) => void,
 ): HTMLElement {
   const panel = element(document, "aside", "studio-right-panel");
@@ -952,7 +1143,15 @@ function createRightPanel(
       tabPanel.append(createChat(document, idPrefix, model, options, drafts));
     } else {
       tabPanel.append(
-        createAssistant(document, idPrefix, model, options, drafts),
+        createAssistant(
+          document,
+          idPrefix,
+          model,
+          options,
+          drafts,
+          assistantMode,
+          onAssistantModeChange,
+        ),
       );
     }
     panel.append(tabPanel);
@@ -1066,25 +1265,84 @@ function createAssistant(
   model: StudioShellModel,
   options: StudioShellOptions,
   drafts: StudioComposerDrafts,
+  mode: StudioAssistantMode,
+  onModeChange: (mode: StudioAssistantMode) => void,
 ): HTMLElement {
   const assistant = element(document, "div", "studio-assistant");
+  assistant.dataset.assistantMode = mode;
   const header = element(document, "div", "studio-assistant__heading");
   header.append(
     element(document, "h2", undefined, "Assistente IA"),
     element(document, "span", "studio-status-chip", model.assistant.statusLabel),
   );
+  const modeSelector = createAssistantModeSelector(
+    document,
+    idPrefix,
+    mode,
+    Boolean(model.assistant.pendingProposal),
+    onModeChange,
+  );
   const safety = element(
     document,
     "p",
     "studio-safety-note",
-    "A IA recebe apenas o contexto selecionado e nunca publica diretamente no jogo.",
+    mode === "ask"
+      ? "Perguntar gera somente uma resposta. Nada é adicionado ao projeto."
+      : "A candidata fica isolada. Adicionar cria apenas uma proposta; ainda será necessário testar e aprovar.",
   );
   assistant.append(
     header,
+    modeSelector,
     createAssistantModelSelector(document, idPrefix, model, options),
     safety,
   );
 
+  if (mode === "ask") {
+    assistant.append(createAssistantConversation(document, model));
+  } else {
+    assistant.append(createAssistantProposalCandidate(document, model, options));
+  }
+  assistant.append(
+    createAssistantComposer(document, idPrefix, model, options, drafts, mode),
+  );
+  return assistant;
+}
+
+function createAssistantModeSelector(
+  document: Document,
+  idPrefix: string,
+  activeMode: StudioAssistantMode,
+  hasPendingProposal: boolean,
+  onChange: (mode: StudioAssistantMode) => void,
+): HTMLElement {
+  const selector = element(document, "div", "studio-assistant-modes");
+  selector.setAttribute("role", "group");
+  selector.setAttribute("aria-label", "Modo da assistente IA");
+  for (const mode of [
+    { id: "ask", label: "Perguntar" },
+    {
+      id: "propose",
+      label: hasPendingProposal ? "Propor mudança (1)" : "Propor mudança",
+    },
+  ] as const satisfies readonly {
+    id: StudioAssistantMode;
+    label: string;
+  }[]) {
+    const button = element(document, "button", "studio-assistant-modes__button", mode.label);
+    button.id = `${idPrefix}-assistant-mode-${mode.id}`;
+    button.type = "button";
+    button.dataset.assistantMode = mode.id;
+    button.setAttribute("aria-pressed", String(mode.id === activeMode));
+    button.addEventListener("click", () => onChange(mode.id));
+    selector.append(button);
+  }
+  return selector;
+}
+
+function createAssistantConversation(
+  document: Document,
+  model: StudioShellModel,
+): HTMLElement {
   const log = element(document, "div", "studio-message-log");
   log.setAttribute("role", "log");
   log.setAttribute("aria-live", "polite");
@@ -1113,28 +1371,179 @@ function createAssistant(
         document,
         "p",
         "studio-empty",
-        "Escolha o contexto e peça uma explicação ou proposta.",
+        "Pergunte sobre o jogo, uma regra ou o contexto selecionado.",
       ),
     );
   }
-  assistant.append(log);
+  return log;
+}
+
+function createAssistantProposalCandidate(
+  document: Document,
+  model: StudioShellModel,
+  options: StudioShellOptions,
+): HTMLElement {
+  const candidate = model.assistant.pendingProposal;
+  if (!candidate) {
+    const empty = element(document, "div", "studio-assistant-proposal-empty");
+    empty.append(
+      element(document, "strong", undefined, "Nenhuma mudança aguardando decisão"),
+      element(
+        document,
+        "p",
+        undefined,
+        "Descreva uma mudança. A IA mostrará operações e riscos antes de você decidir adicioná-la às propostas.",
+      ),
+    );
+    return empty;
+  }
+
+  const status = ASSISTANT_PROPOSAL_STATUS[candidate.status];
+  const card = element(document, "article", "studio-assistant-proposal");
+  card.dataset.proposalStatus = candidate.status;
+  card.dataset.assistantProposalId = candidate.id;
+
+  const heading = element(document, "header", "studio-assistant-proposal__heading");
+  const identity = element(document, "div", "studio-assistant-proposal__identity");
+  const isolationBadge = element(
+    document,
+    "span",
+    "studio-assistant-proposal__isolation-badge",
+    "NÃO APLICADA",
+  );
+  identity.append(
+    isolationBadge,
+    element(document, "h3", undefined, candidate.title),
+  );
+  const statusBadge = element(
+    document,
+    "span",
+    "studio-status-chip",
+    status.label,
+  );
+  statusBadge.dataset.tone = status.tone;
+  heading.append(identity, statusBadge);
+
+  const statusMessage = element(
+    document,
+    "p",
+    "studio-assistant-proposal__status",
+    candidate.statusMessage,
+  );
+  statusMessage.setAttribute("role", "status");
+  statusMessage.setAttribute("aria-live", "polite");
+
+  card.append(
+    heading,
+    element(
+      document,
+      "p",
+      "studio-assistant-proposal__explanation",
+      candidate.explanation,
+    ),
+    createAssistantProposalList(
+      document,
+      "Operações propostas",
+      candidate.operations,
+      "Nenhuma operação estruturada foi gerada.",
+    ),
+    createAssistantProposalList(
+      document,
+      "Riscos para revisar",
+      candidate.risks,
+      "Nenhum risco adicional informado pela IA.",
+    ),
+    statusMessage,
+  );
+
+  const actions = element(document, "footer", "studio-assistant-proposal__actions");
+  const discard = element(document, "button", undefined, "Descartar");
+  discard.type = "button";
+  discard.dataset.testid = "studio-discard-assistant-proposal";
+  discard.addEventListener("click", () => {
+    void options.onDiscardAssistantProposal?.(candidate.id);
+  });
+  const accept = element(
+    document,
+    "button",
+    "studio-assistant-proposal__accept",
+    "Adicionar às propostas",
+  );
+  accept.type = "button";
+  accept.disabled = candidate.status !== "ready";
+  accept.dataset.testid = "studio-accept-assistant-proposal";
+  accept.addEventListener("click", () => {
+    if (candidate.status === "ready") {
+      void options.onAcceptAssistantProposal?.(candidate.id);
+    }
+  });
+  actions.append(discard, accept);
+  card.append(actions);
+  return card;
+}
+
+function createAssistantProposalList(
+  document: Document,
+  title: string,
+  items: readonly string[],
+  emptyMessage: string,
+): HTMLElement {
+  const section = element(document, "section", "studio-assistant-proposal__list");
+  section.append(element(document, "h4", undefined, title));
+  const list = element(document, "ul");
+  if (items.length === 0) {
+    const empty = element(document, "li", "studio-assistant-proposal__empty", emptyMessage);
+    list.append(empty);
+  } else {
+    for (const item of items) {
+      list.append(element(document, "li", undefined, item));
+    }
+  }
+  section.append(list);
+  return section;
+}
+
+function createAssistantComposer(
+  document: Document,
+  idPrefix: string,
+  model: StudioShellModel,
+  options: StudioShellOptions,
+  drafts: StudioComposerDrafts,
+  mode: StudioAssistantMode,
+): HTMLFormElement {
+  const isProposalMode = mode === "propose";
+  const draftKey = isProposalMode ? "assistantPropose" : "assistantAsk";
 
   const form = element(document, "form", "studio-composer") as HTMLFormElement;
-  const label = element(document, "label", "studio-sr-only", "Pedido para a IA");
+  const label = element(
+    document,
+    "label",
+    "studio-sr-only",
+    isProposalMode ? "Mudança para a IA propor" : "Pergunta para a IA",
+  );
   const input = document.createElement("textarea");
   input.rows = 3;
-  input.value = drafts.assistant;
-  input.placeholder = "Ex.: proponha uma patrulha simples para este mob";
+  input.value = drafts[draftKey];
+  input.placeholder = isProposalMode
+    ? "Ex.: proponha uma patrulha simples para este mob"
+    : "Ex.: explique como funciona a movimentação deste mob";
   input.disabled =
-    !model.assistant.canPrompt ||
+    (isProposalMode
+      ? !model.assistant.canPropose
+      : !model.assistant.canPrompt) ||
     model.assistant.state !== "ready" ||
     model.assistant.selectedModelId === null;
-  label.htmlFor = `${idPrefix}-assistant-prompt`;
+  label.htmlFor = `${idPrefix}-assistant-${mode}-prompt`;
   input.id = label.htmlFor;
   input.addEventListener("input", () => {
-    drafts.assistant = input.value;
+    drafts[draftKey] = input.value;
   });
-  const button = element(document, "button", undefined, "Enviar pedido");
+  const button = element(
+    document,
+    "button",
+    undefined,
+    isProposalMode ? "Preparar proposta" : "Enviar pergunta",
+  );
   button.type = "submit";
   button.disabled = input.disabled;
   form.append(label, input, button);
@@ -1146,11 +1555,14 @@ function createAssistant(
       return;
     }
     input.value = "";
-    drafts.assistant = "";
-    void options.onAskAssistant?.(prompt, selectedModelId);
+    drafts[draftKey] = "";
+    if (isProposalMode) {
+      void options.onProposeWithAssistant?.(prompt, selectedModelId);
+    } else {
+      void options.onAskAssistant?.(prompt, selectedModelId);
+    }
   });
-  assistant.append(form);
-  return assistant;
+  return form;
 }
 
 function createAssistantModelSelector(

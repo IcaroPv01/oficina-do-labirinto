@@ -1,3 +1,5 @@
+import { ChangeOperationsSchema, type ChangeOperation } from "@collaborative-roguelike/studio-contracts";
+import { z } from "zod";
 import type { StudioConfig } from "./config.js";
 import { HttpError } from "./errors.js";
 
@@ -22,6 +24,35 @@ export interface AdvisoryReply {
     readonly totalTokens?: number;
   };
 }
+
+export interface AiProposalCandidate {
+  readonly title: string;
+  readonly explanation: string;
+  readonly operations: readonly ChangeOperation[];
+  readonly risks: readonly string[];
+}
+
+/** Safe provider metadata plus a candidate that already crossed the local schema boundary. */
+export interface AiProposalGeneration {
+  readonly provider: "verboo";
+  readonly model: string;
+  readonly requestId: string | null;
+  readonly candidate: AiProposalCandidate;
+}
+
+const AiProposalCandidateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(120),
+    explanation: z.string().trim().min(1).max(4_000),
+    operations: ChangeOperationsSchema.min(1),
+    risks: z.array(z.string().trim().min(1).max(500)).max(8),
+  })
+  .strict();
+
+// Verboo's JSON-object mode does not receive a machine-readable response
+// schema, so the exact same schema used by the local trust boundary is also
+// supplied as model guidance. The Zod parse below is still authoritative.
+const AI_PROPOSAL_SCHEMA_INSTRUCTION = JSON.stringify(z.toJSONSchema(AiProposalCandidateSchema));
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -70,13 +101,7 @@ export class VerbooClient {
   }
 
   async advisoryChat(messages: readonly AdvisoryMessage[], requestedModel?: string): Promise<AdvisoryReply> {
-    const model = requestedModel ?? this.defaultModel;
-    if (!model) {
-      throw new HttpError(400, "model_required", "Escolha um modelo retornado por /api/ai/models");
-    }
-    if (model.length > 200 || !/^[a-zA-Z0-9._:/-]+$/.test(model)) {
-      throw new HttpError(400, "invalid_model", "Identificador de modelo inválido");
-    }
+    const model = this.resolveModel(requestedModel);
 
     const payload = await this.request("/chat/completions", {
       method: "POST",
@@ -127,6 +152,81 @@ export class VerbooClient {
     };
   }
 
+  /** Returns validated structured commands only; this method has no persistence or apply capability. */
+  async proposeChange(prompt: string, requestedModel?: string): Promise<AiProposalGeneration> {
+    const model = this.resolveModel(requestedModel);
+    const payload = await this.request("/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        response_format: {
+          // Verboo supports OpenAI's JSON-object mode, but currently rejects
+          // json_schema upstream. The strict Zod parse below remains the trust
+          // boundary: provider output is data, never executable code.
+          type: "json_object",
+        },
+        messages: [
+          {
+            role: "system",
+            content:
+              "Você propõe mudanças para a Oficina do Labirinto sem aplicá-las. " +
+              "Responda somente com um objeto JSON contendo title, explanation, operations e risks. " +
+              "Use apenas os comandos estruturados permitidos; " +
+              "nunca gere scripts, caminhos arbitrários, instruções de execução, segredos ou afirmações de que a mudança foi aplicada. " +
+              `Siga exatamente este JSON Schema: ${AI_PROPOSAL_SCHEMA_INSTRUCTION}`,
+          },
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+
+    const root = asRecord(payload);
+    const choices = Array.isArray(root?.choices) ? root.choices : [];
+    const first = asRecord(choices[0]);
+    const message = asRecord(first?.message);
+    const content = optionalText(message?.content, this.responseLimit);
+    if (!content) throw invalidProposalResponse();
+
+    let candidate: unknown;
+    try {
+      candidate = JSON.parse(content) as unknown;
+    } catch {
+      throw invalidProposalResponse();
+    }
+    const parsed = AiProposalCandidateSchema.safeParse(candidate);
+    if (!parsed.success) throw invalidProposalResponse();
+    return {
+      provider: "verboo",
+      // Only bounded identifier fields are reflected from the provider. Any
+      // diagnostic/body content remains behind the server trust boundary.
+      model: this.safeProviderIdentifier(root?.model) ?? model,
+      requestId: this.safeProviderIdentifier(root?.id) ?? null,
+      candidate: parsed.data,
+    };
+  }
+
+  private safeProviderIdentifier(value: unknown): string | undefined {
+    const identifier = optionalText(value, 200);
+    if (!identifier || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/.test(identifier)) return undefined;
+    // A malicious or broken upstream must never be able to echo our bearer
+    // credential through a nominally safe metadata field.
+    if (this.key && identifier.includes(this.key)) return undefined;
+    return identifier;
+  }
+
+  private resolveModel(requestedModel?: string): string {
+    const model = requestedModel ?? this.defaultModel;
+    if (!model) {
+      throw new HttpError(400, "model_required", "Escolha um modelo retornado por /api/ai/models");
+    }
+    if (model.length > 200 || !/^[a-zA-Z0-9._:/-]+$/.test(model)) {
+      throw new HttpError(400, "invalid_model", "Identificador de modelo inválido");
+    }
+    return model;
+  }
+
   private async request(path: string, init: RequestInit): Promise<unknown> {
     if (!this.key) throw new HttpError(503, "ai_not_configured", "A integração com a IA ainda não foi configurada");
     let response: Response;
@@ -155,6 +255,14 @@ export class VerbooClient {
       throw new HttpError(502, "invalid_ai_response", "A IA retornou JSON inválido");
     }
   }
+}
+
+function invalidProposalResponse(): HttpError {
+  return new HttpError(
+    502,
+    "invalid_ai_proposal",
+    "A IA não retornou uma proposta estruturada compatível com o Estúdio",
+  );
 }
 
 async function readLimitedResponse(response: Response, maximumBytes: number): Promise<Uint8Array> {

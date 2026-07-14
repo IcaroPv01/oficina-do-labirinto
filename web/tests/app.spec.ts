@@ -43,12 +43,54 @@ test("resgata convite pelo fragmento e abre o Estúdio autenticado", async ({
 
   await page.getByRole("tab", { name: "Assistente IA" }).click();
   const assistant = page.getByRole("tabpanel", { name: "Assistente IA" });
-  await assistant.getByPlaceholder(/proponha uma patrulha/).fill("Explique um movimento simples.");
-  await assistant.getByRole("button", { name: "Enviar pedido" }).click();
+  await assistant.getByPlaceholder(/explique/i).fill("Explique um movimento simples.");
+  await assistant.getByRole("button", { name: "Enviar pergunta" }).click();
   await expect(assistant).toContainText("nada foi aplicado ao jogo");
+
+  await assistant.getByRole("button", { name: "Propor mudança" }).click();
+  await assistant.getByPlaceholder(/proponha/i).fill("Deixe o herói um pouco mais ágil.");
+  await assistant.getByRole("button", { name: "Preparar proposta" }).click();
+  await expect(assistant.getByText("NÃO APLICADA", { exact: true })).toBeVisible();
+  await expect(assistant).toContainText("Pode alterar o ritmo das salas");
+  await assistant.getByRole("button", { name: "Adicionar às propostas" }).click();
+  await expect(assistant.getByText("NÃO APLICADA", { exact: true })).toHaveCount(0);
+  await expect(page.locator("[data-studio-shell='ready']")).toContainText("Herói mais ágil");
+  await expect(page.getByRole("button", { name: "Aprovar para o jogo" })).toBeDisabled();
 
   await page.getByRole("button", { name: "Encerrar sessão" }).click();
   await expect(page.getByTestId("app-ready")).toBeVisible();
+});
+
+test("joga a candidata, registra o teste exato e só então aprova", async ({
+  page,
+}) => {
+  await installStudioBackendMock(page);
+  await page.goto(studioInvitationUrl());
+  await page.getByLabel("Nome exibido no Estúdio").fill("Dono testador");
+  await page.getByRole("button", { name: "Aceitar convite" }).click();
+
+  const shell = page.locator("[data-studio-shell='ready']");
+  await expect(shell.getByText("CANDIDATA", { exact: true })).toBeVisible();
+  const previewHost = shell.locator("[data-studio-preview-host='game']");
+  const canvasHost = previewHost.locator(".game-preview__canvas-host");
+  const canvas = previewHost.locator("canvas");
+  await expect(canvas).toBeVisible();
+
+  await canvas.click();
+  const firstRoom = await canvasHost.getAttribute("data-game-room");
+  await page.keyboard.press("d");
+  await expect
+    .poll(() => canvasHost.getAttribute("data-game-room"))
+    .not.toBe(firstRoom ?? "room-0-0");
+
+  const approve = shell.getByRole("button", { name: "Aprovar para o jogo" });
+  await expect(approve).toBeDisabled();
+  await shell.getByTestId("studio-run-sandbox-test").click();
+  await expect(approve).toBeEnabled();
+  await expect(shell).toContainText("A pessoa confirmou a prévia jogável");
+
+  await approve.click();
+  await expect(shell.getByText("Aprovada", { exact: true })).toBeVisible();
 });
 
 test("edita o projeto, reinicia e exporta um gamepack", async ({ page }) => {

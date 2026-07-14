@@ -13,6 +13,23 @@ export {
   type RandomResult,
 } from "./rng";
 export {
+  createEnemyBehaviorRuntime,
+  ensureEnemyBehaviorRuntime,
+  hasRectangularLineOfSight,
+  markEnemyBehaviorHit,
+  resolveEnemyBehaviorTransitions,
+  stepEnemyBehaviorMovement,
+  type CreateEnemyBehaviorRuntimeOptions,
+  type EnemyBehaviorEntitySnapshot,
+  type EnemyBehaviorMovementResult,
+  type EnemyBehaviorMovementRuntime,
+  type EnemyBehaviorRandomCheckState,
+  type EnemyBehaviorRuntimeState,
+  type EnemyBehaviorWorld,
+  type ResolveEnemyBehaviorTransitionsOptions,
+  type StepEnemyBehaviorMovementOptions,
+} from "./enemy-behavior-runtime";
+export {
   generateDungeon,
   type DungeonLayout,
   type DungeonRoom,

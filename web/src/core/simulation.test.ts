@@ -1,3 +1,4 @@
+import type { EnemyBehaviorV1 } from "@collaborative-roguelike/studio-contracts";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_GAME_PROJECT, type GameProject } from "./project";
 import {
@@ -25,6 +26,199 @@ describe("simulação", () => {
     }
 
     expect(first).toEqual(second);
+  });
+
+  it("preserva exatamente o chase e o shape legados sem behavior", () => {
+    const project: GameProject = {
+      ...DEFAULT_GAME_PROJECT,
+      enemy: { ...DEFAULT_GAME_PROJECT.enemy, spawnCount: 1 },
+    };
+    const initial = createSimulation(project);
+    const enemy = initial.enemies[0]!;
+    const xDistance = initial.player.x - enemy.x;
+    const yDistance = initial.player.y - enemy.y;
+    const length = Math.hypot(xDistance, yDistance);
+    const stepped = stepSimulation(initial, EMPTY_INPUT, 1 / 60, project);
+
+    expect("behaviorRuntime" in enemy).toBe(false);
+    expect(stepped.enemies[0]).toEqual({
+      ...enemy,
+      x: enemy.x + (xDistance / length) * project.enemy.speed * (1 / 60),
+      y: enemy.y + (yDistance / length) * project.enemy.speed * (1 / 60),
+    });
+    expect("behaviorRuntime" in stepped.enemies[0]!).toBe(false);
+    expect(stepped.rngState).toBe(initial.rngState);
+  });
+
+  it("torna behavior observável sem alterar o RNG global da simulação", () => {
+    const legacy: GameProject = {
+      ...DEFAULT_GAME_PROJECT,
+      enemy: { ...DEFAULT_GAME_PROJECT.enemy, spawnCount: 1 },
+    };
+    const idle = withBehavior({
+      schemaVersion: 1,
+      kind: "enemy-behavior",
+      entryStateId: "idle",
+      states: [
+        {
+          stateId: "idle",
+          movement: { kind: "idle", facePlayer: true },
+          transitions: [],
+        },
+      ],
+    });
+    const legacyInitial = createSimulation(legacy, { seed: "observable" });
+    const idleInitial = createSimulation(idle, { seed: "observable" });
+    const legacyNext = stepSimulation(legacyInitial, EMPTY_INPUT, 0.05, legacy);
+    const idleNext = stepSimulation(idleInitial, EMPTY_INPUT, 0.05, idle);
+
+    expect(idleInitial.enemies[0]?.x).toBe(legacyInitial.enemies[0]?.x);
+    expect(idleNext.enemies[0]?.x).toBe(idleInitial.enemies[0]?.x);
+    expect(idleNext.enemies[0]?.y).toBe(idleInitial.enemies[0]?.y);
+    expect(legacyNext.enemies[0]).not.toMatchObject({
+      x: idleNext.enemies[0]?.x,
+      y: idleNext.enemies[0]?.y,
+    });
+    expect(idleNext.rngState).toBe(legacyNext.rngState);
+  });
+
+  it("mantém behavior determinístico inclusive após round-trip JSON", () => {
+    const project = withBehavior({
+      schemaVersion: 1,
+      kind: "enemy-behavior",
+      entryStateId: "wander",
+      states: [
+        {
+          stateId: "wander",
+          movement: {
+            kind: "wander",
+            speedMultiplier: 1,
+            turnIntervalSeconds: 0.15,
+            leashRadius: 80,
+          },
+          transitions: [
+            {
+              transitionId: "transition-random-chase",
+              toStateId: "chase",
+              when: {
+                mode: "all",
+                conditions: [
+                  {
+                    kind: "random-chance",
+                    probability: 0.35,
+                    intervalSeconds: 0.2,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          stateId: "chase",
+          movement: {
+            kind: "chase",
+            speedMultiplier: 0.8,
+            stopDistance: 40,
+            requireLineOfSight: true,
+          },
+          transitions: [],
+        },
+      ],
+    });
+    let first = createSimulation(project, { seed: "behavior-determinism" });
+    let second = createSimulation(project, { seed: "behavior-determinism" });
+
+    for (let tick = 0; tick < 90; tick += 1) {
+      first = stepSimulation(first, EMPTY_INPUT, 1 / 60, project);
+      second = stepSimulation(second, EMPTY_INPUT, 1 / 60, project);
+    }
+    expect(first).toEqual(second);
+
+    let restored = JSON.parse(JSON.stringify(second)) as SimulationState;
+    for (let tick = 0; tick < 90; tick += 1) {
+      first = stepSimulation(first, EMPTY_INPUT, 1 / 60, project);
+      restored = stepSimulation(restored, EMPTY_INPUT, 1 / 60, project);
+    }
+    expect(restored).toEqual(first);
+  });
+
+  it("transiciona por was-hit no tick do impacto e move no estado novo depois", () => {
+    const project = withBehavior({
+      schemaVersion: 1,
+      kind: "enemy-behavior",
+      entryStateId: "waiting",
+      states: [
+        {
+          stateId: "waiting",
+          movement: { kind: "idle", facePlayer: true },
+          transitions: [
+            {
+              transitionId: "transition-after-hit",
+              toStateId: "flee",
+              when: {
+                mode: "all",
+                conditions: [{ kind: "was-hit", withinSeconds: 0.2 }],
+              },
+            },
+          ],
+        },
+        {
+          stateId: "flee",
+          movement: {
+            kind: "flee",
+            speedMultiplier: 1,
+            safeDistance: 200,
+          },
+          transitions: [],
+        },
+      ],
+    });
+    const initial = createSimulation(project, {
+      seed: "hit-transition",
+      spawnCount: 1,
+      enemyMaxHealth: 2,
+    });
+    const enemy = {
+      ...initial.enemies[0]!,
+      x: initial.player.x + 80,
+      y: initial.player.y,
+    };
+    const impactState: SimulationState = {
+      ...initial,
+      nextEntityId: 100,
+      enemies: [enemy],
+      projectiles: [
+        {
+          id: 99,
+          x: enemy.x,
+          y: enemy.y,
+          velocityX: 0,
+          velocityY: 0,
+          ageSeconds: 0,
+        },
+      ],
+    };
+
+    const afterImpact = stepSimulation(
+      impactState,
+      EMPTY_INPUT,
+      1 / 60,
+      project,
+    );
+    expect(afterImpact.enemies[0]).toMatchObject({
+      x: enemy.x,
+      y: enemy.y,
+      health: 1,
+      behaviorRuntime: { stateId: "flee", stateElapsedSeconds: 0 },
+    });
+
+    const afterFlee = stepSimulation(
+      afterImpact,
+      EMPTY_INPUT,
+      1 / 60,
+      project,
+    );
+    expect(afterFlee.enemies[0]!.x).toBeGreaterThan(enemy.x);
   });
 
   it("registra uma morte, um drop e limpa a sala exatamente uma vez", () => {
@@ -176,3 +370,14 @@ describe("simulação", () => {
     expect(state.projectiles).toHaveLength(0);
   });
 });
+
+function withBehavior(behavior: EnemyBehaviorV1): GameProject {
+  return {
+    ...DEFAULT_GAME_PROJECT,
+    enemy: {
+      ...DEFAULT_GAME_PROJECT.enemy,
+      spawnCount: 1,
+      behavior,
+    },
+  };
+}

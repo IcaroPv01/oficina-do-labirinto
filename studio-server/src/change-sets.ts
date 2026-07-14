@@ -243,6 +243,7 @@ export class ChangeSetService {
     const baseRevision = this.loadCurrentProjectRevisionDigest(projectId);
     const operations = parseChangeOperations(input.operations);
     const sourceProposalIds = validateSourceProposalIds(input.sourceProposalIds);
+    this.assertSourceProposalsBelongToProject(projectId, sourceProposalIds);
     const actor = userActor(user);
     const createdAt = nowIso();
     const changeSetId = randomUUID();
@@ -334,6 +335,7 @@ export class ChangeSetService {
       input.sourceProposalIds === undefined
         ? current.sourceProposalIds
         : validateSourceProposalIds(input.sourceProposalIds);
+    this.assertSourceProposalsBelongToProject(projectId, sourceProposalIds);
     const before = digestCanonicalJson({
       title: current.title,
       explanation: current.explanation,
@@ -843,6 +845,35 @@ export class ChangeSetService {
 
   private assertProject(projectId: string): void {
     if (!this.database.getProject(projectId)) throw new HttpError(404, "project_not_found", "Projeto não encontrado");
+  }
+
+  /**
+   * At this stage, the only implemented proposal source is an audited AI
+   * proposal. Future human proposals should add their own explicit entity
+   * discriminator here instead of weakening the same-project binding.
+   */
+  private assertSourceProposalsBelongToProject(projectId: string, sourceProposalIds: readonly string[]): void {
+    if (sourceProposalIds.length === 0) return;
+    const placeholders = sourceProposalIds.map(() => "?").join(", ");
+    const rows = this.database.connection
+      .prepare(
+        `SELECT entity_id FROM activity
+         WHERE project_id = ?
+           AND action = 'ai-proposal.created'
+           AND entity_type = 'ai-proposal'
+           AND entity_id IN (${placeholders})`,
+      )
+      .all(projectId, ...sourceProposalIds) as unknown as Array<{ entity_id: string }>;
+    const auditedIds = new Set(rows.map((row) => row.entity_id));
+    if (sourceProposalIds.some((proposalId) => !auditedIds.has(proposalId))) {
+      // Use the same response for missing and cross-project IDs so this check
+      // does not disclose the existence of activity in another project.
+      throw new HttpError(
+        400,
+        "source_proposal_not_found",
+        "Cada sourceProposalId deve referenciar uma proposta de IA auditada neste projeto",
+      );
+    }
   }
 
   private requireEditor(user: PublicUser): void {

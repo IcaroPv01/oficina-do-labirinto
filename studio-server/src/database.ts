@@ -185,10 +185,25 @@ const migrationV3 = `
   END;
 `;
 
+const migrationV4 = `
+  CREATE TRIGGER activity_no_update
+  BEFORE UPDATE ON activity
+  BEGIN
+    SELECT RAISE(ABORT, 'activity is append-only');
+  END;
+
+  CREATE TRIGGER activity_no_delete
+  BEFORE DELETE ON activity
+  BEGIN
+    SELECT RAISE(ABORT, 'activity is append-only');
+  END;
+`;
+
 const migrations = [
   { version: 1, sql: migrationV1 },
   { version: 2, sql: migrationV2 },
   { version: 3, sql: migrationV3 },
+  { version: 4, sql: migrationV4 },
 ] as const;
 
 export interface PublicUser {
@@ -247,6 +262,23 @@ export interface ChatMessageView {
   readonly kind: "human" | "assistant" | "system";
   readonly body: string;
   readonly createdAt: string;
+}
+
+export interface AiProposalAuditRecord {
+  readonly proposalId: string;
+  readonly projectId: string;
+  readonly createdAt: string;
+  readonly promptDigest: string;
+  readonly author: PublicUser;
+  readonly provider: string;
+  readonly model: string;
+  readonly requestId: string | null;
+  readonly candidate: {
+    readonly title: string;
+    readonly explanation: string;
+    readonly operations: readonly unknown[];
+    readonly risks: readonly string[];
+  };
 }
 
 type UserRow = { id: string; display_name: string; role: string };
@@ -647,6 +679,36 @@ export class StudioDatabase {
       body: row.body,
       createdAt: row.created_at,
     }));
+  }
+
+  /**
+   * Persists only the digest of the user's prompt. The proposal ID is the
+   * durable audit handle later carried by ChangeSet.sourceProposalIds.
+   */
+  appendAiProposalActivity(record: AiProposalAuditRecord): void {
+    if (!this.getProject(record.projectId)) {
+      throw new HttpError(404, "project_not_found", "Projeto não encontrado");
+    }
+    const data = {
+      schemaVersion: 1,
+      proposalId: record.proposalId,
+      projectId: record.projectId,
+      createdAt: record.createdAt,
+      promptDigest: record.promptDigest,
+      author: record.author,
+      provider: record.provider,
+      model: record.model,
+      requestId: record.requestId,
+      candidate: record.candidate,
+      applied: false,
+    };
+    this.connection
+      .prepare(
+        `INSERT INTO activity(
+           id, project_id, actor_id, action, entity_type, entity_id, metadata_json, created_at
+         ) VALUES (?, ?, ?, 'ai-proposal.created', 'ai-proposal', ?, ?, ?)`,
+      )
+      .run(randomUUID(), record.projectId, record.author.id, record.proposalId, JSON.stringify(data), record.createdAt);
   }
 
   private insertActivity(

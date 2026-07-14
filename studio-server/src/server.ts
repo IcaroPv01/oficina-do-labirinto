@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -45,6 +45,7 @@ export interface VerbooGateway {
   readonly configured: boolean;
   listModels(): ReturnType<VerbooClient["listModels"]>;
   advisoryChat(...parameters: Parameters<VerbooClient["advisoryChat"]>): ReturnType<VerbooClient["advisoryChat"]>;
+  proposeChange(...parameters: Parameters<VerbooClient["proposeChange"]>): ReturnType<VerbooClient["proposeChange"]>;
 }
 
 interface RouteContext {
@@ -378,6 +379,42 @@ export function createStudioServer(config: StudioConfig, dependencies: ServerDep
       const model = optionalStringField(body, "model", 200);
       const reply = await aiGate.run(`${principal.user.id}:ai`, () => verboo.advisoryChat(messages, model));
       sendJson(response, 200, { mode: "advisory", applied: false, reply });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/ai/propose") {
+      const principal = requireMutationSession(context, database, config, aiRate);
+      if (!canEdit(principal.user.role)) {
+        throw new HttpError(403, "editor_required", "Permissão de edição necessária para gerar uma proposta");
+      }
+      const body = record(await readJson(request, config.maxJsonBytes));
+      const projectId = opaqueId(stringField(body, "projectId", { max: 128 }), "projectId");
+      if (!database.getProject(projectId)) {
+        throw new HttpError(404, "project_not_found", "Projeto não encontrado");
+      }
+      const prompt = stringField(body, "prompt", { max: config.maxAiChars });
+      const model = optionalStringField(body, "model", 200);
+      const generation = await aiGate.run(`${principal.user.id}:ai`, () => verboo.proposeChange(prompt, model));
+      const proposalId = randomUUID();
+      const createdAt = new Date().toISOString();
+      const promptDigest = createHash("sha256").update(prompt, "utf8").digest("hex");
+      const auditRecord = {
+        proposalId,
+        projectId,
+        createdAt,
+        promptDigest,
+        author: principal.user,
+        provider: generation.provider,
+        model: generation.model,
+        requestId: generation.requestId,
+        candidate: generation.candidate,
+      };
+      database.appendAiProposalActivity(auditRecord);
+      sendJson(response, 200, {
+        mode: "proposal",
+        applied: false,
+        ...auditRecord,
+      });
       return;
     }
 

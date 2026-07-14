@@ -54,6 +54,8 @@ host loopback.
 - `POST .../:changeSetId/ready`, `/testing`, `/tests` e `/review`
 - `GET /api/projects/:id/activity`
 - `GET /api/ai/models`, `POST /api/ai/chat` (somente consultivo)
+- `POST /api/ai/propose` exige `projectId`, `prompt` e um `model` quando não há
+  modelo-padrão local; retorna metadados auditáveis e candidato JSON não aplicado
 - `GET /ws?projectId=...` para presença, chat e notificações de revisão
 
 Requisições mutáveis autenticadas exigem `X-Studio-CSRF` com o valor entregue
@@ -67,3 +69,13 @@ revisão atuais. A aprovação exige `decision: "approve"`, papel `owner`, teste
 aprovado para o mesmo `revisionId` e `revisionDigest`, e uma revisão base que
 ainda seja a atual do projeto. `request-changes` e `reject` ficam registrados no
 histórico imutável. Ainda não existe publicação ou escrita no GitHub.
+
+`/api/ai/propose` solicita JSON ao provedor e usa o JSON Schema como instrução,
+mas a fronteira de confiança é a validação local estrita, incluindo
+`ChangeOperationsSchema`. O resultado não cria change set, não altera snapshot e
+não possui acesso a qualquer caminho de aplicação; ele precisa entrar no fluxo
+normal de revisão e sandbox por uma ação posterior do usuário. Cada resposta traz
+um `proposalId` opaco que pode ser usado em `sourceProposalIds`, além de
+`createdAt`, autor e proveniência limitada a `provider`, `model` e `requestId`.
+O texto do prompt não é persistido: somente seu digest SHA-256 aparece na
+atividade append-only `ai-proposal.created`.

@@ -91,6 +91,46 @@ test("change-set HTTP API exposes structured candidate, sandbox result, audit an
     assert.equal((testing.body as { changeSet: { status: string } }).changeSet.status, "testing");
 
     const completedAt = new Date().toISOString();
+    const mismatchedTest = await postAction(
+      baseUrl,
+      projectId,
+      created.changeSet.changeSetId,
+      "tests",
+      headers,
+      {
+        revisionId: candidate.revisionId,
+        revisionDigest: "f".repeat(64),
+        status: "passed",
+        checks: [{ name: "Movimento", status: "passed", details: null }],
+        startedAt: new Date(Date.parse(completedAt) - 1_000).toISOString(),
+        completedAt,
+      },
+    );
+    assert.equal(mismatchedTest.response.status, 409);
+    assert.equal((mismatchedTest.body as { error: { code: string } }).error.code, "candidate_mismatch");
+
+    const excessiveChecks = await postAction(
+      baseUrl,
+      projectId,
+      created.changeSet.changeSetId,
+      "tests",
+      headers,
+      {
+        revisionId: candidate.revisionId,
+        revisionDigest: candidate.digest,
+        status: "passed",
+        checks: Array.from({ length: 65 }, (_, index) => ({
+          name: `Check ${index}`,
+          status: "passed",
+          details: null,
+        })),
+        startedAt: new Date(Date.parse(completedAt) - 1_000).toISOString(),
+        completedAt,
+      },
+    );
+    assert.equal(excessiveChecks.response.status, 400);
+    assert.equal((excessiveChecks.body as { error: { code: string } }).error.code, "invalid_checks");
+
     const testResponse = await postAction(baseUrl, projectId, created.changeSet.changeSetId, "tests", headers, {
       revisionId: candidate.revisionId,
       revisionDigest: candidate.digest,

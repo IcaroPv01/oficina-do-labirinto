@@ -41,20 +41,31 @@ export type StudioLayoutPreference = "auto" | "desktop" | "mobile";
 
 export type StudioResolvedLayout = "desktop" | "mobile";
 
-export type StudioSandboxControl =
-  | "move-up"
-  | "move-left"
-  | "move-down"
-  | "move-right"
-  | "fire"
-  | "action"
-  | "pause";
+/** Describes only the Studio-owned preview lifecycle, not Phaser internals. */
+export type StudioSandboxPreviewState =
+  | "preparing"
+  | "ready"
+  | "testing"
+  | "failed";
 
-export type StudioSandboxControlPhase = "start" | "end";
+export type StudioSandboxCheckStatus = "pending" | "passed" | "failed";
 
-export interface StudioSandboxControlEvent {
-  readonly control: StudioSandboxControl;
-  readonly phase: StudioSandboxControlPhase;
+export interface StudioSandboxChecklistItem {
+  readonly id: string;
+  readonly label: string;
+  readonly detail?: string;
+  readonly status: StudioSandboxCheckStatus;
+}
+
+/**
+ * Everything the shell needs to explain whether the visible revision is safe
+ * to test. The actual game stays mounted in StudioShellHandle.sandboxPreviewHost.
+ */
+export interface StudioSandboxModel {
+  readonly previewState: StudioSandboxPreviewState;
+  readonly statusMessage: string;
+  readonly canRunTest: boolean;
+  readonly checklist: readonly StudioSandboxChecklistItem[];
 }
 
 export type StudioPanelItemTone = "neutral" | "success" | "warning" | "error";
@@ -117,6 +128,24 @@ export interface StudioAssistantMessage {
 
 export type StudioAssistantState = "ready" | "working" | "unavailable";
 
+export type StudioAssistantMode = "ask" | "propose";
+
+export type StudioAssistantProposalStatus =
+  | "preparing"
+  | "ready"
+  | "failed";
+
+/** A preview-only proposal. It is not a change set until explicitly accepted. */
+export interface StudioAssistantProposalCandidate {
+  readonly id: string;
+  readonly title: string;
+  readonly explanation: string;
+  readonly operations: readonly string[];
+  readonly risks: readonly string[];
+  readonly status: StudioAssistantProposalStatus;
+  readonly statusMessage: string;
+}
+
 export interface StudioAssistantModelOption {
   readonly id: string;
   readonly label: string;
@@ -128,8 +157,10 @@ export interface StudioAssistantModel {
   readonly statusLabel: string;
   readonly messages: readonly StudioAssistantMessage[];
   readonly canPrompt: boolean;
+  readonly canPropose: boolean;
   readonly models: readonly StudioAssistantModelOption[];
   readonly selectedModelId: string | null;
+  readonly pendingProposal: StudioAssistantProposalCandidate | null;
 }
 
 export interface StudioPanelItem {
@@ -171,10 +202,17 @@ export interface StudioShellModel {
   readonly problems: readonly StudioPanelItem[];
   readonly tests: readonly StudioPanelItem[];
   readonly activity: readonly StudioPanelItem[];
+  readonly sandbox: StudioSandboxModel;
   readonly approval: StudioApprovalModel;
 }
 
 export interface StudioApproveRequest {
+  readonly workspaceId: string;
+  readonly proposalId: string;
+  readonly revisionId: string;
+}
+
+export interface StudioRunSandboxTestRequest {
   readonly workspaceId: string;
   readonly proposalId: string;
   readonly revisionId: string;
@@ -189,7 +227,9 @@ export interface StudioShellOptions {
   readonly onLayoutPreferenceChange?: (
     preference: StudioLayoutPreference,
   ) => void;
-  readonly onSandboxControl?: (event: StudioSandboxControlEvent) => void;
+  readonly onRunSandboxTest?: (
+    request: StudioRunSandboxTestRequest,
+  ) => void | Promise<void>;
   readonly onExitStudio?: () => void;
   readonly onLogout?: () => void | Promise<void>;
   readonly onSendChat?: (channelId: string, message: string) => void | Promise<void>;
@@ -197,11 +237,24 @@ export interface StudioShellOptions {
     prompt: string,
     modelId: string,
   ) => void | Promise<void>;
+  readonly onProposeWithAssistant?: (
+    prompt: string,
+    modelId: string,
+  ) => void | Promise<void>;
+  /** Requests change-set creation only; it never approves or publishes. */
+  readonly onAcceptAssistantProposal?: (
+    proposalId: string,
+  ) => void | Promise<void>;
+  readonly onDiscardAssistantProposal?: (
+    proposalId: string,
+  ) => void | Promise<void>;
   readonly onAssistantModelChange?: (modelId: string) => void;
   readonly onApprove?: (request: StudioApproveRequest) => void | Promise<void>;
 }
 
 export interface StudioShellHandle {
+  /** Stable mount point: updating the shell never recreates the Phaser host. */
+  readonly sandboxPreviewHost: HTMLElement;
   update(model: StudioShellModel): void;
   destroy(): void;
 }

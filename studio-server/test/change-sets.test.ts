@@ -295,6 +295,106 @@ test("contracts reject arbitrary code operations before persistence", () => {
   }
 });
 
+test("source proposal IDs must resolve to audited AI proposals in the same project on create and edit", () => {
+  const database = new StudioDatabase(":memory:");
+  try {
+    const owner = database.createDevSession("Icaro", 60_000).user;
+    const project = database.createProject("Labirinto", { version: 1 }, "Projeto inicial", owner).project;
+    const otherProject = database.createProject("Outro", { version: 1 }, "Outro projeto", owner).project;
+    const service = new ChangeSetService(database);
+    const localProposalId = "ai-proposal-local-001";
+    const secondLocalProposalId = "ai-proposal-local-002";
+    const crossProjectProposalId = "ai-proposal-other-001";
+    appendAiProposalAudit(database, project.id, localProposalId, owner);
+    appendAiProposalAudit(database, project.id, secondLocalProposalId, owner);
+    appendAiProposalAudit(database, otherProject.id, crossProjectProposalId, owner);
+
+    for (const invalidSourceId of ["ai-proposal-missing-001", crossProjectProposalId]) {
+      assert.throws(
+        () =>
+          service.create(
+            project.id,
+            {
+              title: "Fonte inválida",
+              explanation: "Não deve aceitar proveniência inexistente ou de outro projeto.",
+              operations: [speedOperation],
+              sourceProposalIds: [invalidSourceId],
+            },
+            owner,
+          ),
+        { status: 400, code: "source_proposal_not_found" },
+      );
+    }
+
+    const created = service.create(
+      project.id,
+      {
+        title: "Fonte válida",
+        explanation: "Candidata ligada à atividade auditável.",
+        operations: [speedOperation],
+        sourceProposalIds: [localProposalId],
+      },
+      owner,
+    );
+    assert.deepEqual(created.changeSet.sourceProposalIds, [localProposalId]);
+
+    assert.throws(
+      () =>
+        service.edit(
+          project.id,
+          created.changeSet.changeSetId,
+          {
+            baseVersion: created.version,
+            title: "Tentativa de trocar a fonte",
+            sourceProposalIds: [crossProjectProposalId],
+            reason: "Teste negativo de isolamento entre projetos.",
+          },
+          owner,
+        ),
+      { status: 400, code: "source_proposal_not_found" },
+    );
+
+    const edited = service.edit(
+      project.id,
+      created.changeSet.changeSetId,
+      {
+        baseVersion: created.version,
+        title: "Fonte válida atualizada",
+        sourceProposalIds: [secondLocalProposalId],
+        reason: "Troca para outra proposta auditada no mesmo projeto.",
+      },
+      owner,
+    );
+    assert.deepEqual(edited.changeSet.sourceProposalIds, [secondLocalProposalId]);
+  } finally {
+    database.close();
+  }
+});
+
+function appendAiProposalAudit(
+  database: StudioDatabase,
+  projectId: string,
+  proposalId: string,
+  author: ReturnType<StudioDatabase["createDevSession"]>["user"],
+): void {
+  database.appendAiProposalActivity({
+    proposalId,
+    projectId,
+    createdAt: new Date().toISOString(),
+    promptDigest: "a".repeat(64),
+    author,
+    provider: "verboo",
+    model: "test-model",
+    requestId: "test-request",
+    candidate: {
+      title: "Proposta auditada",
+      explanation: "Candidata de teste não aplicada.",
+      operations: [speedOperation],
+      risks: ["Pode alterar o ritmo."],
+    },
+  });
+}
+
 function passingTestInput(revisionId: string, revisionDigest: string) {
   const completedAt = new Date().toISOString();
   const startedAt = new Date(Date.parse(completedAt) - 1_000).toISOString();

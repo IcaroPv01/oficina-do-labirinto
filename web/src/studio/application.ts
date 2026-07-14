@@ -9,6 +9,8 @@ import {
   createStudioServerApiClient,
   normalizeStudioServerUrl,
   type StudioBackendRole,
+  type StudioAiProposalCandidateDto,
+  type StudioAiProposalDto,
   type StudioChangeSetDto,
   type StudioChatMessageDto,
   type StudioProjectSummaryDto,
@@ -22,6 +24,7 @@ import {
 } from "./assistant-models";
 import type {
   StudioAssistantMessage,
+  StudioAssistantProposalCandidate,
   StudioConnectionState,
   StudioMemberSummary,
   StudioProposalStatus,
@@ -46,6 +49,15 @@ import {
   safeStorageSet,
   urlWithoutInviteToken,
 } from "./routing";
+import {
+  createSandboxPreviewRuntime,
+  type SandboxPreviewRuntime,
+} from "./sandbox-preview-runtime";
+import {
+  createSandboxTestInput,
+  evaluateStudioCandidate,
+  type StudioCandidateEvaluation,
+} from "./sandbox-workflow";
 import { createStudioShell } from "./studio-shell";
 
 const DEFAULT_MODEL_ID = "deepseek-v4-flash";
@@ -62,11 +74,14 @@ export async function mountStudioApplication(
   const storage = window.localStorage;
   let shell: StudioShellHandle | null = null;
   let realtime: ReturnType<typeof createStudioRealtime> | null = null;
+  let sandboxPreview: SandboxPreviewRuntime | null = null;
   let destroyed = false;
 
   const destroyRuntime = (): void => {
     realtime?.destroy();
     realtime = null;
+    sandboxPreview?.destroy();
+    sandboxPreview = null;
     shell?.destroy();
     shell = null;
   };
@@ -197,6 +212,7 @@ export async function mountStudioApplication(
       });
       shell = runtime.shell;
       realtime = runtime.realtime;
+      sandboxPreview = runtime.sandboxPreview;
     } catch (error) {
       renderFailure(root, "O projeto não pôde ser aberto.", errorMessage(error), exitStudio);
     }
@@ -244,6 +260,7 @@ interface ProjectRuntimeInput {
 function createProjectRuntime(input: ProjectRuntimeInput): {
   readonly shell: StudioShellHandle;
   readonly realtime: ReturnType<typeof createStudioRealtime>;
+  readonly sandboxPreview: SandboxPreviewRuntime;
 } {
   let chatMessages = [...input.initialChat];
   let changeSets = [...input.initialChangeSets];
@@ -251,8 +268,16 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
   let sharedRevisionNumber = input.revisionNumber;
   let sharedRevisionUpdatedAt = input.projectSummary.updatedAt;
   let assistantMessages: StudioAssistantMessage[] = [];
+  let pendingAssistantProposal: StudioAssistantProposalCandidate | null = null;
+  let pendingAssistantPayload: {
+    readonly id: string;
+    readonly proposal: StudioAiProposalDto;
+  } | null = null;
+  let assistantProposalInFlight = false;
   let actionError: string | null = null;
+  let previewError: string | null = null;
   let approvalInFlight = false;
+  let sandboxTestInFlight = false;
   let connectionState: StudioConnectionState = "syncing";
   let members = new Map<string, StudioMemberSummary>();
   let selectedChangeSetId = changeSets[0]?.changeSetId ?? null;
@@ -268,14 +293,65 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
     ? "candidate"
     : "current";
   let shell: StudioShellHandle;
+  let renderedPreviewKey: string | null = null;
+  let candidateEvaluationCache: {
+    readonly key: string;
+    readonly evaluation: StudioCandidateEvaluation;
+  } | null = null;
+  const sandboxPreview = createSandboxPreviewRuntime({
+    onFailure(error) {
+      previewError = `A prévia jogável não pôde ser carregada. ${errorMessage(error)}`;
+      shell.update(buildModel());
+    },
+  });
 
   members.set(
     `session:${input.session.user.id}`,
     memberFromStudioUser(input.session.user),
   );
 
+  const selectedChangeSet = (): StudioChangeSetDto | null =>
+    changeSets.find(({ changeSetId }) => changeSetId === selectedChangeSetId) ??
+    null;
+
+  const candidateEvaluation = (): StudioCandidateEvaluation => {
+    const selected = selectedChangeSet();
+    const cacheKey = [
+      sharedRevisionNumber,
+      selected?.changeSetId ?? "none",
+      selected?.candidateRevision?.revisionId ?? "none",
+      selected?.candidateRevision?.digest ?? "none",
+      selected?.status ?? "none",
+      sandboxTestInFlight,
+    ].join(":");
+    if (candidateEvaluationCache?.key === cacheKey) {
+      return candidateEvaluationCache.evaluation;
+    }
+    const evaluation = evaluateStudioCandidate({
+      publishedProject: sharedProject,
+      publishedRevisionNumber: sharedRevisionNumber,
+      changeSet: selected,
+      userRole: input.session.user.role,
+      testInFlight: sandboxTestInFlight,
+    });
+    candidateEvaluationCache = { key: cacheKey, evaluation };
+    return evaluation;
+  };
+
+  const replaceChangeSet = (updated: StudioChangeSetDto): void => {
+    changeSets = changeSets.map((changeSet) =>
+      changeSet.changeSetId === updated.changeSetId ? updated : changeSet,
+    );
+    candidateEvaluationCache = null;
+  };
+
   const buildModel = (): StudioShellModel => {
-    const selected = changeSets.find(({ changeSetId }) => changeSetId === selectedChangeSetId) ?? null;
+    const selected = selectedChangeSet();
+    const sandbox = candidateEvaluation();
+    const inspectedProject =
+      comparisonTarget === "candidate" && sandbox.previewProject
+        ? sandbox.previewProject
+        : sharedProject;
     const candidateDigest = selected?.candidateRevision?.digest ?? null;
     const exactPassingTest =
       selected?.latestTest?.status === "passed" &&
@@ -305,16 +381,16 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
         selectionLabel: selected?.title ?? sharedProject.name,
         description: selected?.explanation ?? "Projeto compartilhado atualmente publicado.",
         fields: [
-          { id: "seed", label: "Seed", value: sharedProject.seed },
+          { id: "seed", label: "Seed", value: inspectedProject.seed },
           {
             id: "player",
             label: "Vida do jogador",
-            value: String(sharedProject.player.maxHealth),
+            value: String(inspectedProject.player.maxHealth),
           },
           {
             id: "enemy",
             label: "Inimigo básico",
-            value: sharedProject.enemy.name,
+            value: inspectedProject.enemy.name,
           },
         ],
       },
@@ -331,12 +407,23 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
         canPost: input.session.user.role !== "viewer",
       },
       assistant: {
-        state: input.availableModelIds.length > 0 ? "ready" : "unavailable",
-        statusLabel: input.modelError ?? (input.availableModelIds.length > 0 ? "Pronta" : "Indisponível"),
+        state: input.availableModelIds.length === 0
+          ? "unavailable"
+          : assistantProposalInFlight
+            ? "working"
+            : "ready",
+        statusLabel: input.modelError ?? (assistantProposalInFlight
+          ? "Preparando proposta"
+          : input.availableModelIds.length > 0 ? "Pronta" : "Indisponível"),
         messages: assistantMessages,
-        canPrompt: input.availableModelIds.length > 0,
+        canPrompt: input.availableModelIds.length > 0 && !assistantProposalInFlight,
+        canPropose:
+          input.availableModelIds.length > 0 &&
+          !assistantProposalInFlight &&
+          canEditProject(input.session.user.role),
         models: modelOptions,
         selectedModelId,
+        pendingProposal: pendingAssistantProposal,
       },
       changes: selected
         ? selected.operations.map((operation, index) => ({
@@ -359,12 +446,30 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
         ...(input.proposalError
           ? [{ id: "proposal-api", title: "Propostas indisponíveis", detail: input.proposalError, tone: "warning" as const }]
           : []),
+        ...(previewError
+          ? [
+              {
+                id: "sandbox-preview",
+                title: "Prévia jogável indisponível",
+                detail: previewError,
+                tone: "error" as const,
+              },
+            ]
+          : []),
         ...failedChecks.map((check) => ({
           id: check.checkId,
           title: check.name,
           detail: check.details ?? "Verificação falhou.",
           tone: "error" as const,
         })),
+        ...sandbox.model.checklist
+          .filter(({ status }) => status === "failed")
+          .map((check) => ({
+            id: `local:${check.id}`,
+            title: check.label,
+            detail: check.detail ?? "Verificação local falhou.",
+            tone: "error" as const,
+          })),
       ],
       tests: selected?.latestTest
         ? selected.latestTest.checks.map((check) => ({
@@ -381,6 +486,7 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
           detail: formatDate(sharedRevisionUpdatedAt),
         },
       ],
+      sandbox: sandbox.model,
       approval: {
         candidateRevisionId: selected?.candidateRevision?.revisionId ?? null,
         testedRevisionId: exactPassingTest?.revisionId ?? null,
@@ -394,7 +500,42 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
     };
   };
 
-  const refresh = (): void => shell.update(buildModel());
+  const syncPlayablePreview = (): void => {
+    const evaluation = candidateEvaluation();
+    const selected = selectedChangeSet();
+    const previewProject =
+      comparisonTarget === "current"
+        ? sharedProject
+        : evaluation.previewProject;
+    const nextPreviewKey =
+      previewProject === null
+        ? null
+        : comparisonTarget === "current"
+          ? `current:${sharedRevisionNumber}`
+          : `candidate:${selected?.candidateRevision?.revisionId ?? "none"}:${selected?.candidateRevision?.digest ?? "none"}`;
+
+    if (nextPreviewKey === null) {
+      if (renderedPreviewKey !== null) {
+        renderedPreviewKey = null;
+        sandboxPreview.clear();
+      }
+    } else if (previewProject !== null && nextPreviewKey !== renderedPreviewKey) {
+      renderedPreviewKey = nextPreviewKey;
+      previewError = null;
+      void sandboxPreview.show(shell.sandboxPreviewHost, previewProject);
+    }
+
+    const resolvedMobile =
+      shell.sandboxPreviewHost.closest<HTMLElement>(".studio-shell")?.dataset[
+        "layout"
+      ] === "mobile";
+    sandboxPreview.setActive(!resolvedMobile || mobileView === "sandbox");
+  };
+
+  const refresh = (): void => {
+    shell.update(buildModel());
+    syncPlayablePreview();
+  };
   shell = createStudioShell(input.root, buildModel(), {
     onExitStudio: input.exitStudio,
     onSelectProposal(changeSetId) {
@@ -404,6 +545,7 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
     },
     onComparisonChange(target) {
       comparisonTarget = target;
+      refresh();
     },
     onRightPanelChange(tab) {
       rightPanelTab = tab;
@@ -413,10 +555,87 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
     },
     onMobileViewChange(view) {
       mobileView = view;
+      refresh();
     },
     onLayoutPreferenceChange(preference) {
       layoutPreference = preference;
       safeStorageSet(input.storage, STUDIO_LAYOUT_STORAGE_KEY, preference);
+      refresh();
+    },
+    async onRunSandboxTest(request) {
+      if (sandboxTestInFlight) return;
+      const selected = selectedChangeSet();
+      const candidate = selected?.candidateRevision;
+      const evaluation = candidateEvaluation();
+      if (
+        !selected ||
+        !candidate ||
+        !evaluation.canRecordTest ||
+        request.workspaceId !== input.projectSummary.id ||
+        request.proposalId !== selected.changeSetId ||
+        request.revisionId !== candidate.revisionId
+      ) {
+        return;
+      }
+
+      sandboxTestInFlight = true;
+      actionError = null;
+      const startedAt = new Date().toISOString();
+      refresh();
+      try {
+        let testingChangeSet = selected;
+        if (testingChangeSet.status === "draft") {
+          testingChangeSet = await input.client.markChangeSetReady(
+            input.projectSummary.id,
+            testingChangeSet.changeSetId,
+            "Candidata preparada no navegador e enviada ao sandbox.",
+          );
+          replaceChangeSet(testingChangeSet);
+        }
+        if (testingChangeSet.status === "proposed") {
+          testingChangeSet = await input.client.markChangeSetTesting(
+            input.projectSummary.id,
+            testingChangeSet.changeSetId,
+            "Início do teste da revisão candidata exata.",
+          );
+          replaceChangeSet(testingChangeSet);
+        }
+        if (
+          testingChangeSet.status !== "testing" ||
+          testingChangeSet.candidateRevision?.revisionId !==
+            candidate.revisionId ||
+          testingChangeSet.candidateRevision.digest !== candidate.digest
+        ) {
+          throw new Error(
+            "A candidata mudou durante a preparação; recarregue e teste a nova revisão.",
+          );
+        }
+
+        const evidence = createSandboxTestInput(
+          evaluation,
+          testingChangeSet,
+          startedAt,
+          new Date().toISOString(),
+        );
+        if (!evidence) {
+          throw new Error(
+            "A evidência não corresponde mais à revisão candidata selecionada.",
+          );
+        }
+        const updated = await input.client.recordSandboxTest(
+          input.projectSummary.id,
+          testingChangeSet.changeSetId,
+          evidence,
+        );
+        replaceChangeSet(updated);
+        bottomPanelTab = "tests";
+      } catch (error) {
+        actionError = `Não foi possível registrar o teste: ${errorMessage(error)}`;
+      } finally {
+        sandboxTestInFlight = false;
+        candidateEvaluationCache = null;
+        refresh();
+      }
     },
     async onLogout() {
       try {
@@ -463,6 +682,100 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
       }
       refresh();
     },
+    async onProposeWithAssistant(prompt, modelId) {
+      if (assistantProposalInFlight || !canEditProject(input.session.user.role)) return;
+      const proposalId = crypto.randomUUID();
+      pendingAssistantPayload = null;
+      pendingAssistantProposal = {
+        id: proposalId,
+        title: "Preparando proposta estruturada",
+        explanation: "A IA está montando comandos de domínio que ainda não alteram o projeto.",
+        operations: [],
+        risks: [],
+        status: "preparing",
+        statusMessage: "NÃO APLICADA · aguardando resposta validada",
+      };
+      assistantProposalInFlight = true;
+      actionError = null;
+      refresh();
+      try {
+        const proposal = await input.client.proposeChangeWithAi(
+          input.projectSummary.id,
+          selectedProjectContextPrompt(prompt, sharedProject),
+          modelId || DEFAULT_MODEL_ID,
+        );
+        if (pendingAssistantProposal?.id !== proposalId) return;
+        const candidate = proposal.candidate;
+        pendingAssistantPayload = { id: proposal.proposalId, proposal };
+        pendingAssistantProposal = {
+          id: proposal.proposalId,
+          title: candidate.title,
+          explanation: candidate.explanation,
+          operations: candidate.operations.map(describeCandidateOperation),
+          risks: candidate.risks,
+          status: "ready",
+          statusMessage: `NÃO APLICADA · ${proposal.model} · revise antes de adicionar`,
+        };
+      } catch (error) {
+        if (pendingAssistantProposal?.id !== proposalId) return;
+        pendingAssistantProposal = {
+          ...pendingAssistantProposal,
+          status: "failed",
+          statusMessage: `A proposta foi rejeitada: ${errorMessage(error)}`,
+        };
+      } finally {
+        assistantProposalInFlight = false;
+        refresh();
+      }
+    },
+    async onAcceptAssistantProposal(proposalId) {
+      const pending = pendingAssistantProposal;
+      const payload = pendingAssistantPayload;
+      if (
+        !pending ||
+        pending.status !== "ready" ||
+        pending.id !== proposalId ||
+        payload?.id !== proposalId ||
+        !canEditProject(input.session.user.role)
+      ) {
+        return;
+      }
+      actionError = null;
+      try {
+        const created = await input.client.createChangeSet(
+          input.projectSummary.id,
+          {
+            title: payload.proposal.candidate.title,
+            explanation: payload.proposal.candidate.explanation,
+            operations: payload.proposal.candidate.operations,
+            sourceProposalIds: [proposalId],
+          },
+        );
+        changeSets = [
+          created,
+          ...changeSets.filter(({ changeSetId }) => changeSetId !== created.changeSetId),
+        ];
+        selectedChangeSetId = created.changeSetId;
+        comparisonTarget = "candidate";
+        bottomPanelTab = "changes";
+        pendingAssistantProposal = null;
+        pendingAssistantPayload = null;
+        assistantMessages = [
+          ...assistantMessages,
+          systemMessage("A candidata foi adicionada como rascunho. Ela ainda precisa ser testada e aprovada."),
+        ];
+        candidateEvaluationCache = null;
+      } catch (error) {
+        actionError = `Não foi possível criar o rascunho da proposta: ${errorMessage(error)}`;
+      }
+      refresh();
+    },
+    onDiscardAssistantProposal(proposalId) {
+      if (pendingAssistantProposal?.id !== proposalId) return;
+      pendingAssistantProposal = null;
+      pendingAssistantPayload = null;
+      refresh();
+    },
     async onApprove(request) {
       if (approvalInFlight) return;
       const selected = changeSets.find(({ changeSetId }) => changeSetId === request.proposalId);
@@ -492,9 +805,7 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
             explanation: "Revisão exata testada e aprovada no Estúdio.",
           },
         );
-        changeSets = changeSets.map((changeSet) =>
-          changeSet.changeSetId === updated.changeSetId ? updated : changeSet,
-        );
+        replaceChangeSet(updated);
       } catch (error) {
         actionError = `Não foi possível aprovar a proposta: ${errorMessage(error)}`;
       } finally {
@@ -503,6 +814,7 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
       }
     },
   });
+  syncPlayablePreview();
 
   const realtime = createStudioRealtime({
     transport: input.client.transport,
@@ -559,7 +871,7 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
       refresh();
     },
   });
-  return { shell, realtime };
+  return { shell, realtime, sandboxPreview };
 }
 
 function changeSetSummary(changeSet: StudioChangeSetDto) {
@@ -614,6 +926,25 @@ function narrowAssistantContext(messages: readonly StudioAssistantMessage[], pro
     },
     ...conversation,
   ];
+}
+
+function selectedProjectContextPrompt(request: string, project: GameProject): string {
+  return [
+    `Pedido do coautor: ${request}`,
+    "Contexto selecionado pelo coautor: snapshot estruturado completo do projeto atual.",
+    JSON.stringify(project),
+    "Prepare somente uma candidata com operações de domínio permitidas. Não afirme que aplicou a mudança.",
+  ].join("\n\n");
+}
+
+function describeCandidateOperation(
+  operation: StudioAiProposalCandidateDto["operations"][number],
+): string {
+  return `${operation.kind} — ${operation.explanation}`;
+}
+
+function canEditProject(role: StudioBackendRole): boolean {
+  return role === "owner" || role === "editor";
 }
 
 function systemMessage(body: string): StudioAssistantMessage {

@@ -31,9 +31,9 @@ trabalho ficam em `docs/COLLABORATION.md`; segurança, em `docs/SECURITY.md`.
 | 0. Jogo web público | Concluído | Site publicado, `main` protegida e CI/Pages verdes |
 | 1. Fundação do Estúdio | Concluído | Contratos, servidor, segredo local, banco e builds verdes |
 | 2. Colaboração direta | Em validação | Convite, projeto compartilhado, chat/presença e reconexão utilizáveis em duas sessões |
-| 3. Proposta e sandbox | Backend concluído | Revisão exata protegida no servidor; falta o preview candidato funcional no navegador |
+| 3. Proposta e sandbox | Concluído para dados estruturados | Candidata jogável e testada no desktop/mobile; assets aguardam R-203 |
 | 4. Promoção segura | Pendente | Aprovação cria branch/PR; CI publica; rollback ensaiado |
-| 5. IA aplicada | Parcial | Chat consultivo e seletor prontos; propostas estruturadas e sprites/PNG em quarentena |
+| 5. IA aplicada | Parcial avançado | Chat, propostas auditáveis e comportamento prontos; sprites/PNG aguardam R-203 |
 | 6. Operação doméstica | Pendente | PC antigo, túnel HTTPS, serviço automático e backup/restore verificados |
 | 7. Colaborador GitHub | Bloqueado por design | Somente depois de três ciclos completos e auditoria final |
 
@@ -56,7 +56,7 @@ trabalho ficam em `docs/COLLABORATION.md`; segurança, em `docs/SECURITY.md`.
   - snapshot otimista, explicação por revisão, chat, presença e auditoria;
   - gateway Verboo consultivo e limites técnicos;
   - proposta, teste, histórico imutável e aprovação por ID + SHA-256 exatos;
-  - 15 testes de integração aprovados e smoke HTTP compilado.
+  - 17 testes de integração aprovados e smoke HTTP compilado.
 - [x] Chave Verboo em `.env.local`, ignorada/não rastreada e com ACL restrita.
 - [x] API Verboo validada sem imprimir a chave:
   - `deepseek-v4-flash` — padrão, contexto 1.048.576;
@@ -70,6 +70,17 @@ trabalho ficam em `docs/COLLABORATION.md`; segurança, em `docs/SECURITY.md`.
   comparação e aprovação bloqueada por revisão.
 - [x] Controles reais de toque no Phaser: movimento, disparo, ação, pausa e
   reinício; teste mobile em retrato/paisagem criado.
+- [x] Sandbox candidato no navegador:
+  - clone imutável, operações tipadas, diff e checklist;
+  - simulação limitada executada duas vezes para provar determinismo;
+  - preview Phaser atual/candidato e evidência presa ao digest exato;
+  - jogo real por toque e teste em 320 px e paisagem, sem sobreposição.
+- [x] Propostas estruturadas da Verboo:
+  - modos separados **Perguntar** e **Propor mudança**;
+  - JSON validado localmente e nunca executado como código;
+  - candidata marcada **NÃO APLICADA**, com operações e riscos;
+  - autor, data, modelo, request ID e hash do prompt em atividade append-only;
+  - aceite explícito cria somente um rascunho, sem testar, aprovar ou publicar.
 
 ## Em andamento agora
 
@@ -117,25 +128,28 @@ Responsável: integração/QA.
 - [x] rerodar E2E em 320 px, Pixel 5 e paisagem após a integração do shell;
 - [x] confirmar zero sobreposição e zero rolagem horizontal.
 
-## Próximas tarefas, em ordem
+## Concluído nesta etapa
 
 ### R-201 — Sandbox funcional no navegador
 
-- aplicar operações a um clone imutável do `GameProject`;
-- validar Zod/schema, IDs, referências, limites e assets;
-- executar simulação determinística com limites de passos e entidades;
-- montar preview marcado como **CANDIDATO**;
-- comparar atual/candidato e guardar checklist/evidência;
-- aprovar somente o digest devolvido pelo backend.
+- [x] aplicar operações a um clone imutável do `GameProject`;
+- [x] validar Zod/schema, IDs, referências e limites;
+- [x] bloquear operações de asset enquanto a quarentena R-203 não existe;
+- [x] executar simulação determinística com limites de passos e entidades;
+- [x] montar preview marcado como **CANDIDATO**;
+- [x] comparar atual/candidato e guardar checklist/evidência;
+- [x] aprovar somente o digest devolvido pelo backend.
 
 ### R-202 — IA que propõe sem aplicar
 
-- prompt recebe somente o contexto selecionado;
-- resposta em JSON estrito validada como operações de domínio;
-- comportamento de mob usa a DSL permitida;
-- resultado entra em proposta isolada e nunca no jogo final;
-- registrar modelo, autor, data, prompt hash e riscos;
-- testar respostas inválidas, grandes ou maliciosas.
+- [x] prompt recebe somente o contexto selecionado;
+- [x] resposta em JSON estrito validada como operações de domínio;
+- [x] comportamento de mob usa a DSL permitida e runtime determinístico;
+- [x] resultado entra em proposta isolada e nunca no jogo final;
+- [x] registrar modelo, autor, data, prompt hash e riscos;
+- [x] testar respostas inválidas, grandes ou maliciosas.
+
+## Próximas tarefas, em ordem
 
 ### R-203 — Sprites e tratamento de PNG
 
@@ -183,10 +197,10 @@ Portanto a primeira entrega usa:
 
 Último gate local em 13/07/2026:
 
-- web: 24 arquivos e 96 testes unitários;
+- web: 28 arquivos e 143 testes unitários;
 - contratos: 72 testes;
-- servidor: 15 testes;
-- navegador: 9 cenários E2E, incluindo Estúdio, chat/IA/logout e mobile;
+- servidor: 17 testes;
+- navegador: 12 cenários E2E, incluindo candidata jogável, IA e mobile;
 - typecheck, conteúdo, builds e auditoria npm aprovados.
 
 Antes de marcar um item técnico como concluído:

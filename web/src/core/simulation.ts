@@ -1,5 +1,13 @@
 import type { GameProject } from "./project";
 import { hashSeed, nextRandom } from "./rng";
+import {
+  createEnemyBehaviorRuntime,
+  ensureEnemyBehaviorRuntime,
+  markEnemyBehaviorHit,
+  resolveEnemyBehaviorTransitions,
+  stepEnemyBehaviorMovement,
+  type EnemyBehaviorRuntimeState,
+} from "./enemy-behavior-runtime";
 
 export interface Vector2 {
   readonly x: number;
@@ -22,6 +30,8 @@ export interface PlayerState extends Vector2 {
 export interface EnemyState extends Vector2 {
   readonly id: number;
   readonly health: number;
+  /** Present only when the project opts into the declarative behavior DSL. */
+  readonly behaviorRuntime?: EnemyBehaviorRuntimeState;
 }
 
 export interface ProjectileState extends Vector2 {
@@ -106,7 +116,7 @@ export function createSimulation(
     x: project.world.width / 2,
     y: project.world.height / 2,
   };
-  const enemies: EnemyState[] = [];
+  let enemies: EnemyState[] = [];
 
   for (let index = 0; index < spawnCount; index += 1) {
     const angleResult = nextRandom(rngState);
@@ -123,6 +133,20 @@ export function createSimulation(
       y: clamp(center.y + Math.sin(angle) * distance, margin, project.world.height - margin),
     });
     nextEntityId += 1;
+  }
+
+  const initialBehavior = project.enemy.behavior;
+  if (initialBehavior !== undefined) {
+    enemies = enemies.map((enemy) => ({
+      ...enemy,
+      behaviorRuntime: createEnemyBehaviorRuntime(initialBehavior, {
+        simulationSeed: seed,
+        enemyId: enemy.id,
+        x: enemy.x,
+        y: enemy.y,
+        encounterMaxHealth: enemyMaxHealth,
+      }),
+    }));
   }
 
   return {
@@ -222,24 +246,57 @@ export function stepSimulation(
     events.push({ type: "shot", x: projectile.x, y: projectile.y });
   }
 
+  const enemyBehavior = project.enemy.behavior;
   let enemies = combatActive
-    ? previous.enemies.map((enemy): EnemyState => {
-        const direction = normalized(player.x - enemy.x, player.y - enemy.y);
-        const margin = project.world.wallThickness + project.enemy.radius;
-        return {
-          ...enemy,
-          x: clamp(
-            enemy.x + direction.x * project.enemy.speed * deltaSeconds,
-            margin,
-            project.world.width - margin,
-          ),
-          y: clamp(
-            enemy.y + direction.y * project.enemy.speed * deltaSeconds,
-            margin,
-            project.world.height - margin,
-          ),
-        };
-      })
+    ? enemyBehavior === undefined
+      ? previous.enemies.map((enemy): EnemyState => {
+          const direction = normalized(player.x - enemy.x, player.y - enemy.y);
+          const margin = project.world.wallThickness + project.enemy.radius;
+          return {
+            ...enemy,
+            x: clamp(
+              enemy.x + direction.x * project.enemy.speed * deltaSeconds,
+              margin,
+              project.world.width - margin,
+            ),
+            y: clamp(
+              enemy.y + direction.y * project.enemy.speed * deltaSeconds,
+              margin,
+              project.world.height - margin,
+            ),
+          };
+        })
+      : previous.enemies.map((enemy): EnemyState => {
+          const behaviorRuntime = ensureEnemyBehaviorRuntime(
+            enemyBehavior,
+            enemy.behaviorRuntime,
+            {
+              simulationSeed: previous.seed,
+              enemyId: enemy.id,
+              x: enemy.x,
+              y: enemy.y,
+              encounterMaxHealth:
+                enemy.behaviorRuntime?.encounterMaxHealth ??
+                Math.max(enemy.health, project.enemy.maxHealth),
+            },
+          );
+          const moved = stepEnemyBehaviorMovement({
+            behavior: enemyBehavior,
+            runtime: behaviorRuntime,
+            enemy,
+            player,
+            baseSpeed: project.enemy.speed,
+            enemyRadius: project.enemy.radius,
+            deltaSeconds,
+            world: project.world,
+          });
+          return {
+            ...enemy,
+            x: moved.x,
+            y: moved.y,
+            behaviorRuntime: moved.runtime,
+          };
+        })
     : [...previous.enemies];
 
   if (combatActive && player.invulnerabilityRemaining <= 0) {
@@ -289,7 +346,20 @@ export function stepSimulation(
 
     if (remainingHealth > 0) {
       enemies = enemies.map((candidate, index) =>
-        index === enemyIndex ? { ...candidate, health: remainingHealth } : candidate,
+        index === enemyIndex
+          ? {
+              ...candidate,
+              health: remainingHealth,
+              ...(candidate.behaviorRuntime === undefined
+                ? {}
+                : {
+                    behaviorRuntime: markEnemyBehaviorHit(
+                      candidate.behaviorRuntime,
+                      previous.elapsedSeconds + deltaSeconds,
+                    ),
+                  }),
+            }
+          : candidate,
       );
       continue;
     }
@@ -305,6 +375,33 @@ export function stepSimulation(
       events.push({ type: "drop-created", pickupId });
       pickups.push({ id: pickupId, kind: "heart", x: enemy.x, y: enemy.y });
     }
+  }
+
+  if (combatActive && enemyBehavior !== undefined) {
+    enemies = enemies.map((enemy) => {
+      const behaviorRuntime = ensureEnemyBehaviorRuntime(
+        enemyBehavior,
+        enemy.behaviorRuntime,
+        {
+          simulationSeed: previous.seed,
+          enemyId: enemy.id,
+          x: enemy.x,
+          y: enemy.y,
+          encounterMaxHealth: Math.max(enemy.health, project.enemy.maxHealth),
+        },
+      );
+      return {
+        ...enemy,
+        behaviorRuntime: resolveEnemyBehaviorTransitions({
+          behavior: enemyBehavior,
+          runtime: behaviorRuntime,
+          enemy,
+          player,
+          nowSeconds: previous.elapsedSeconds + deltaSeconds,
+          world: project.world,
+        }),
+      };
+    });
   }
 
   const collectedIds = new Set<number>();

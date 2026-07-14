@@ -132,6 +132,23 @@ describe("createStudioShell", () => {
         (node) => node.dataset.studioPreviewSlot === "candidate",
       )?.getAttribute("role"),
     ).toBe("region");
+    expect(
+      findOne(
+        container,
+        (node) => node.dataset.studioPreviewHost === "game",
+      ),
+    ).toBeDefined();
+    expect(
+      findOne(container, (node) => node.textContent === "CANDIDATA"),
+    ).toBeDefined();
+    expect(
+      findOne(
+        container,
+        (node) =>
+          node.getAttribute("aria-label") ===
+          "Evidências do teste da candidata",
+      ),
+    ).toBeDefined();
     expect(findAll(container, (node) => node.type === "radio")).toHaveLength(2);
   });
 
@@ -225,15 +242,15 @@ describe("createStudioShell", () => {
     ).toBeDefined();
   });
 
-  it("oferece navegação móvel completa e controles de toque rotulados", () => {
+  it("oferece navegação móvel e registra o teste sem duplicar controles do jogo", () => {
     const document = new FakeDocument();
     const container = document.createElement("div");
     const onMobileViewChange = vi.fn();
-    const onSandboxControl = vi.fn();
+    const onRunSandboxTest = vi.fn();
     createStudioShell(
       container as unknown as HTMLElement,
       createModel({ layoutPreference: "mobile", mobileView: "project" }),
-      { onMobileViewChange, onSandboxControl },
+      { onMobileViewChange, onRunSandboxTest },
     );
 
     const root = findOne(
@@ -265,26 +282,270 @@ describe("createStudioShell", () => {
     expect(onMobileViewChange).toHaveBeenCalledWith("collaboration");
     expect(root?.dataset.mobileView).toBe("collaboration");
 
-    const touchButtons = findAll(
+    expect(
+      findAll(
+        container,
+        (node) => node.className === "studio-touch-button",
+      ),
+    ).toHaveLength(0);
+
+    const runTest = findOne(
       container,
-      (node) => node.className === "studio-touch-button",
+      (node) => node.dataset.testid === "studio-run-sandbox-test",
     );
-    expect(touchButtons).toHaveLength(7);
-    expect(touchButtons.every((button) => Boolean(button.getAttribute("aria-label"))))
-      .toBe(true);
-    const fire = touchButtons.find(
-      (button) => button.dataset.control === "fire",
+    expect(runTest?.disabled).toBe(false);
+    runTest?.dispatch("click");
+    expect(onRunSandboxTest).toHaveBeenCalledWith({
+      workspaceId: "oficina",
+      proposalId: "proposal-1",
+      revisionId: "rev-1",
+    });
+  });
+
+  it("preserva o host do Phaser e seu conteúdo durante qualquer update", () => {
+    const document = new FakeDocument();
+    const container = document.createElement("div");
+    const handle = createStudioShell(
+      container as unknown as HTMLElement,
+      createModel(),
     );
-    fire?.dispatch("pointerdown");
-    fire?.dispatch("pointerup");
-    expect(onSandboxControl).toHaveBeenNthCalledWith(1, {
-      control: "fire",
-      phase: "start",
-    });
-    expect(onSandboxControl).toHaveBeenNthCalledWith(2, {
-      control: "fire",
-      phase: "end",
-    });
+    const previewHost = handle.sandboxPreviewHost as unknown as FakeElement;
+    const phaserCanvas = document.createElement("canvas");
+    previewHost.append(phaserCanvas);
+
+    handle.update(
+      createModel({
+        connectionState: "syncing",
+        sandbox: {
+          previewState: "testing",
+          statusMessage: "Executando verificações da revisão rev-1.",
+          canRunTest: false,
+          checklist: [
+            {
+              id: "mobile-playthrough",
+              label: "Jogabilidade móvel",
+              status: "pending",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(handle.sandboxPreviewHost).toBe(
+      previewHost as unknown as HTMLElement,
+    );
+    expect(
+      findOne(container, (node) => node.dataset.studioPreviewHost === "game"),
+    ).toBe(previewHost);
+    expect(previewHost.children).toContain(phaserCanvas);
+    expect(
+      findOne(
+        container,
+        (node) => node.dataset.previewState === "testing",
+      ),
+    ).toBeDefined();
+  });
+
+  it("mantém o jogo atual jogável mesmo quando a candidata falha", () => {
+    const document = new FakeDocument();
+    const container = document.createElement("div");
+    createStudioShell(
+      container as unknown as HTMLElement,
+      createModel({
+        comparisonTarget: "current",
+        sandbox: {
+          previewState: "failed",
+          statusMessage: "A candidata contém uma operação inválida.",
+          canRunTest: true,
+          checklist: [],
+        },
+      }),
+    );
+
+    const preview = findOne(
+      container,
+      (node) => node.dataset.studioPreviewSlot === "current",
+    );
+    expect(preview?.dataset.previewState).toBe("ready");
+    expect(
+      findOne(container, (node) => node.textContent === "ATUAL"),
+    ).toBeDefined();
+    expect(
+      findOne(
+        container,
+        (node) => node.dataset.testid === "studio-run-sandbox-test",
+      )?.disabled,
+    ).toBe(true);
+  });
+
+  it("mantém a conversa humana separada do modo de propor com IA", () => {
+    const document = new FakeDocument();
+    const container = document.createElement("div");
+    const onSendChat = vi.fn();
+    const onProposeWithAssistant = vi.fn();
+    createStudioShell(
+      container as unknown as HTMLElement,
+      createModel({ rightPanelTab: "chat" }),
+      { onSendChat, onProposeWithAssistant },
+    );
+
+    const input = findOne(
+      container,
+      (node) => node.placeholder.startsWith("Escreva uma mensagem"),
+    );
+    expect(input).toBeDefined();
+    if (input) {
+      input.value = "Registrar a decisão com meu amigo";
+      input.dispatch("input");
+      input.parent?.dispatch("submit");
+    }
+
+    expect(onSendChat).toHaveBeenCalledWith(
+      "proposal-1",
+      "Registrar a decisão com meu amigo",
+    );
+    expect(onProposeWithAssistant).not.toHaveBeenCalled();
+  });
+
+  it("pedir uma proposta não a aceita nem usa o fluxo de pergunta", () => {
+    const document = new FakeDocument();
+    const container = document.createElement("div");
+    const onAskAssistant = vi.fn();
+    const onProposeWithAssistant = vi.fn();
+    const onAcceptAssistantProposal = vi.fn();
+    createStudioShell(
+      container as unknown as HTMLElement,
+      createModel({ rightPanelTab: "assistant" }),
+      {
+        onAskAssistant,
+        onProposeWithAssistant,
+        onAcceptAssistantProposal,
+      },
+    );
+
+    findOne(
+      container,
+      (node) => node.textContent === "Propor mudança",
+    )?.dispatch("click");
+    const input = findOne(
+      container,
+      (node) => node.placeholder.startsWith("Ex.: proponha"),
+    );
+    expect(input).toBeDefined();
+    if (input) {
+      input.value = "Faça o morcego patrulhar a sala";
+      input.dispatch("input");
+      input.parent?.dispatch("submit");
+    }
+
+    expect(onProposeWithAssistant).toHaveBeenCalledWith(
+      "Faça o morcego patrulhar a sala",
+      "deepseek-v4-flash",
+    );
+    expect(onAskAssistant).not.toHaveBeenCalled();
+    expect(onAcceptAssistantProposal).not.toHaveBeenCalled();
+  });
+
+  it("exige aceite explícito antes de pedir a criação do change set", () => {
+    const document = new FakeDocument();
+    const container = document.createElement("div");
+    const onAcceptAssistantProposal = vi.fn();
+    const onApprove = vi.fn();
+    const onRunSandboxTest = vi.fn();
+    createStudioShell(
+      container as unknown as HTMLElement,
+      createModel({
+        rightPanelTab: "assistant",
+        assistant: {
+          ...createModel().assistant,
+          pendingProposal: {
+            id: "ai-proposal-1",
+            title: "Patrulha curta do morcego",
+            explanation: "Troca a perseguição por uma rota determinística.",
+            operations: ["Definir comportamento do inimigo como patrulha."],
+            risks: ["A rota pode encostar em paredes estreitas."],
+            status: "ready",
+            statusMessage: "Revise antes de adicionar às propostas.",
+          },
+        },
+      }),
+      { onAcceptAssistantProposal, onApprove, onRunSandboxTest },
+    );
+
+    expect(onAcceptAssistantProposal).not.toHaveBeenCalled();
+    findOne(
+      container,
+      (node) => node.textContent.startsWith("Propor mudança"),
+    )?.dispatch("click");
+    expect(
+      findOne(container, (node) => node.textContent === "NÃO APLICADA"),
+    ).toBeDefined();
+    expect(
+      findOne(
+        container,
+        (node) => node.textContent === "Definir comportamento do inimigo como patrulha.",
+      ),
+    ).toBeDefined();
+    expect(onAcceptAssistantProposal).not.toHaveBeenCalled();
+
+    findOne(
+      container,
+      (node) => node.dataset.testid === "studio-accept-assistant-proposal",
+    )?.dispatch("click");
+
+    expect(onAcceptAssistantProposal).toHaveBeenCalledWith("ai-proposal-1");
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(onRunSandboxTest).not.toHaveBeenCalled();
+  });
+
+  it("preserva rascunhos independentes ao alternar os modos da IA", () => {
+    const document = new FakeDocument();
+    const container = document.createElement("div");
+    createStudioShell(
+      container as unknown as HTMLElement,
+      createModel({ rightPanelTab: "assistant" }),
+    );
+
+    const askInput = findOne(
+      container,
+      (node) => node.placeholder.startsWith("Ex.: explique"),
+    );
+    if (askInput) {
+      askInput.value = "Como o morcego se move?";
+      askInput.dispatch("input");
+    }
+    findOne(
+      container,
+      (node) => node.textContent === "Propor mudança",
+    )?.dispatch("click");
+    const proposeInput = findOne(
+      container,
+      (node) => node.placeholder.startsWith("Ex.: proponha"),
+    );
+    if (proposeInput) {
+      proposeInput.value = "Mude a rota do morcego";
+      proposeInput.dispatch("input");
+    }
+    findOne(
+      container,
+      (node) => node.textContent === "Perguntar",
+    )?.dispatch("click");
+    expect(
+      findOne(
+        container,
+        (node) => node.placeholder.startsWith("Ex.: explique"),
+      )?.value,
+    ).toBe("Como o morcego se move?");
+    findOne(
+      container,
+      (node) => node.textContent === "Propor mudança",
+    )?.dispatch("click");
+    expect(
+      findOne(
+        container,
+        (node) => node.placeholder.startsWith("Ex.: proponha"),
+      )?.value,
+    ).toBe("Mude a rota do morcego");
   });
 
   it("troca o modo sem perder o rascunho do chat", () => {
@@ -404,6 +665,7 @@ function createModel(
       state: "ready",
       statusLabel: "Pronta",
       canPrompt: true,
+      canPropose: true,
       models: [
         {
           id: "deepseek-v4-flash",
@@ -413,6 +675,7 @@ function createModel(
       ],
       selectedModelId: "deepseek-v4-flash",
       messages: [],
+      pendingProposal: null,
     },
     changes: [
       { id: "change-1", title: "Comportamento", detail: "chase → patrol" },
@@ -424,6 +687,25 @@ function createModel(
     activity: [
       { id: "activity-1", title: "Amigo atualizou o morcego" },
     ],
+    sandbox: {
+      previewState: "ready",
+      statusMessage: "A candidata está pronta para jogar no desktop ou celular.",
+      canRunTest: true,
+      checklist: [
+        {
+          id: "contract",
+          label: "Contrato do projeto",
+          detail: "Estrutura válida.",
+          status: "passed",
+        },
+        {
+          id: "mobile-playthrough",
+          label: "Jogabilidade móvel",
+          detail: "Aguardando teste manual.",
+          status: "pending",
+        },
+      ],
+    },
     approval: {
       candidateRevisionId: "rev-1",
       testedRevisionId: "rev-1",

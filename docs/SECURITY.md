@@ -20,6 +20,10 @@
   arquivo ignorado pelo Git ou no gerenciador de segredos do sistema.
 - Chamadas de IA partem do backend autenticado. O navegador recebe somente a
   resposta filtrada ou uma proposta validável.
+- Propostas da IA usam modo JSON no provedor e cruzam uma validação Zod
+  estrita de operações de domínio; texto do modelo nunca é tratado como código.
+- O prompt bruto não é devolvido nem persistido. A auditoria append-only guarda
+  apenas SHA-256, autor, data, modelo, request ID limitado, riscos e candidata.
 - A IA não recebe shell, filesystem, aprovação, publicação ou escrita em
   `main`.
 - Convites são de uso único e sessões podem ser revogadas.
@@ -30,6 +34,8 @@
   mutações REST ainda exigem o token CSRF mantido apenas em memória.
 - Toda aprovação referencia o digest exato da revisão testada; qualquer edição
   posterior invalida a aprovação.
+- Aceitar uma candidata da IA cria somente um change set em rascunho ligado ao
+  `proposalId`; não inicia teste, não aprova e não publica.
 - Assets candidatos ficam em quarentena e repetem validação, reencodificação,
   hash e conferência de proveniência antes de serem promovidos.
 - Código gerado não executa no processo do servidor. A primeira versão aceita

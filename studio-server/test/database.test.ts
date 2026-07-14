@@ -75,6 +75,18 @@ test("project snapshots use optimistic revisions and retain explanations", () =>
 
     const message = database.addChatMessage(created.project.id, session.user, "Teste pronto");
     assert.equal(database.listChatMessages(created.project.id, undefined, 10)[0]?.id, message.id);
+
+    const activity = database.connection
+      .prepare("SELECT id FROM activity WHERE project_id = ? ORDER BY created_at LIMIT 1")
+      .get(created.project.id) as { id: string };
+    assert.throws(
+      () => database.connection.prepare("UPDATE activity SET action = 'tampered' WHERE id = ?").run(activity.id),
+      /activity is append-only/,
+    );
+    assert.throws(
+      () => database.connection.prepare("DELETE FROM activity WHERE id = ?").run(activity.id),
+      /activity is append-only/,
+    );
   } finally {
     database.close();
   }

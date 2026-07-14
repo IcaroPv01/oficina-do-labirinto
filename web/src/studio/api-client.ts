@@ -1,5 +1,7 @@
 import {
+  ChangeOperationsSchema,
   ChangeSetSchema,
+  type ChangeOperation,
   type ChangeSet,
   type RevisionDigestMetadata,
   type SandboxTestRecord,
@@ -81,6 +83,50 @@ export type StudioChangeSetStatusDto = ChangeSet["status"];
 export type StudioRevisionDigestDto = RevisionDigestMetadata;
 export type StudioSandboxTestDto = SandboxTestRecord;
 export type StudioChangeSetDto = ChangeSet;
+
+export interface StudioSandboxCheckInput {
+  readonly checkId?: string;
+  readonly name: string;
+  readonly status: "passed" | "failed";
+  readonly details: string | null;
+}
+
+/** Evidence submitted by the sandbox for one exact candidate revision. */
+export interface StudioSandboxTestInput {
+  readonly revisionId: string;
+  readonly revisionDigest: string;
+  readonly status: "passed" | "failed";
+  readonly checks: readonly StudioSandboxCheckInput[];
+  readonly startedAt: string;
+  readonly completedAt: string;
+}
+
+export interface StudioAiProposalCandidateDto {
+  readonly title: string;
+  readonly explanation: string;
+  readonly operations: readonly ChangeOperation[];
+  readonly risks: readonly string[];
+}
+
+/** Non-secret provenance for one AI candidate that has not been applied. */
+export interface StudioAiProposalDto {
+  readonly proposalId: string;
+  readonly projectId: string;
+  readonly createdAt: string;
+  readonly promptDigest: string;
+  readonly author: StudioPublicUserDto;
+  readonly provider: string;
+  readonly model: string;
+  readonly requestId: string | null;
+  readonly candidate: StudioAiProposalCandidateDto;
+}
+
+export interface StudioCreateChangeSetInput {
+  readonly title: string;
+  readonly explanation: string;
+  readonly operations: readonly ChangeOperation[];
+  readonly sourceProposalIds?: readonly string[];
+}
 
 export type StudioTransportMethod = "GET" | "POST" | "PUT" | "PATCH";
 
@@ -235,6 +281,29 @@ export interface StudioServerApiClient {
     projectId: string,
     signal?: AbortSignal,
   ): Promise<readonly StudioChangeSetDto[]>;
+  createChangeSet(
+    projectId: string,
+    input: StudioCreateChangeSetInput,
+    signal?: AbortSignal,
+  ): Promise<StudioChangeSetDto>;
+  markChangeSetReady(
+    projectId: string,
+    changeSetId: string,
+    explanation: string,
+    signal?: AbortSignal,
+  ): Promise<StudioChangeSetDto>;
+  markChangeSetTesting(
+    projectId: string,
+    changeSetId: string,
+    explanation: string,
+    signal?: AbortSignal,
+  ): Promise<StudioChangeSetDto>;
+  recordSandboxTest(
+    projectId: string,
+    changeSetId: string,
+    input: StudioSandboxTestInput,
+    signal?: AbortSignal,
+  ): Promise<StudioChangeSetDto>;
   reviewChangeSet(
     projectId: string,
     changeSetId: string,
@@ -246,6 +315,12 @@ export interface StudioServerApiClient {
     },
     signal?: AbortSignal,
   ): Promise<StudioChangeSetDto>;
+  proposeChangeWithAi(
+    projectId: string,
+    prompt: string,
+    model: string,
+    signal?: AbortSignal,
+  ): Promise<StudioAiProposalDto>;
 }
 
 export function createStudioServerApiClient(
@@ -387,6 +462,89 @@ export function createStudioServerApiClient(
       );
       return response.changeSets.map(parseChangeSetResponse);
     },
+    async createChangeSet(projectId, input, signal) {
+      const operations = ChangeOperationsSchema.min(1).parse(input.operations);
+      const response = await transport.send<{
+        readonly changeSet: unknown;
+      }>(
+        request(
+          "POST",
+          `/api/projects/${segment(projectId)}/change-sets`,
+          {
+            title: input.title,
+            explanation: input.explanation,
+            operations,
+            ...(input.sourceProposalIds === undefined
+              ? {}
+              : { sourceProposalIds: input.sourceProposalIds }),
+          },
+          signal,
+          true,
+        ),
+      );
+      return parseChangeSetResponse(response.changeSet);
+    },
+    async markChangeSetReady(projectId, changeSetId, explanation, signal) {
+      const response = await transport.send<{
+        readonly changeSet: unknown;
+      }>(
+        request(
+          "POST",
+          `/api/projects/${segment(projectId)}/change-sets/${segment(changeSetId)}/ready`,
+          { explanation },
+          signal,
+          true,
+        ),
+      );
+      const changeSet = parseChangeSetResponse(response.changeSet);
+      if (changeSet.status !== "proposed") {
+        throw new StudioApiError(
+          502,
+          "invalid_ready_response",
+          "O servidor não confirmou que a proposta ficou pronta para teste.",
+        );
+      }
+      return changeSet;
+    },
+    async markChangeSetTesting(projectId, changeSetId, explanation, signal) {
+      const response = await transport.send<{
+        readonly changeSet: unknown;
+      }>(
+        request(
+          "POST",
+          `/api/projects/${segment(projectId)}/change-sets/${segment(changeSetId)}/testing`,
+          { explanation },
+          signal,
+          true,
+        ),
+      );
+      const changeSet = parseChangeSetResponse(response.changeSet);
+      if (changeSet.status !== "testing") {
+        throw new StudioApiError(
+          502,
+          "invalid_testing_response",
+          "O servidor não confirmou que a proposta entrou em teste.",
+        );
+      }
+      return changeSet;
+    },
+    async recordSandboxTest(projectId, changeSetId, input, signal) {
+      validateSandboxTestInput(input);
+      const response = await transport.send<{
+        readonly changeSet: unknown;
+      }>(
+        request(
+          "POST",
+          `/api/projects/${segment(projectId)}/change-sets/${segment(changeSetId)}/tests`,
+          input,
+          signal,
+          true,
+        ),
+      );
+      const changeSet = parseChangeSetResponse(response.changeSet);
+      assertRecordedTestTargetsRequestedRevision(changeSet, input);
+      return changeSet;
+    },
     async reviewChangeSet(projectId, changeSetId, input, signal) {
       const response = await transport.send<{
         readonly changeSet: unknown;
@@ -400,6 +558,37 @@ export function createStudioServerApiClient(
         ),
       );
       return parseChangeSetResponse(response.changeSet);
+    },
+    async proposeChangeWithAi(projectId, prompt, model, signal) {
+      const response = await transport.send<{
+        readonly mode?: unknown;
+        readonly applied?: unknown;
+        readonly proposalId?: unknown;
+        readonly projectId?: unknown;
+        readonly createdAt?: unknown;
+        readonly promptDigest?: unknown;
+        readonly author?: unknown;
+        readonly provider?: unknown;
+        readonly model?: unknown;
+        readonly requestId?: unknown;
+        readonly candidate?: unknown;
+      }>(
+        request(
+          "POST",
+          "/api/ai/propose",
+          { projectId, prompt, model },
+          signal,
+          true,
+        ),
+      );
+      if (response.mode !== "proposal" || response.applied !== false) {
+        throw invalidAiProposalResponse();
+      }
+      const proposal = parseAiProposalResponse(response);
+      if (proposal.projectId !== projectId) {
+        throw invalidAiProposalResponse();
+      }
+      return proposal;
     },
   };
   return client;
@@ -445,6 +634,177 @@ function parseChangeSetResponse(value: unknown): StudioChangeSetDto {
     );
   }
   return parsed.data;
+}
+
+function validateSandboxTestInput(input: StudioSandboxTestInput): void {
+  if (!isServerOpaqueId(input.revisionId) || !/^[0-9a-f]{64}$/.test(input.revisionDigest)) {
+    throw invalidSandboxTestInput("Informe a revisão candidata e seu digest SHA-256 exatos.");
+  }
+  if (!Array.isArray(input.checks) || input.checks.length < 1 || input.checks.length > 64) {
+    throw invalidSandboxTestInput("O teste precisa conter entre 1 e 64 verificações.");
+  }
+  if (input.status !== "passed" && input.status !== "failed") {
+    throw invalidSandboxTestInput("O resultado geral do teste é inválido.");
+  }
+  const suppliedCheckIds = new Set<string>();
+  for (const check of input.checks) {
+    const name = typeof check.name === "string" ? check.name.trim() : "";
+    if (!name || name.length > 120) {
+      throw invalidSandboxTestInput("Cada verificação precisa de um nome com até 120 caracteres.");
+    }
+    if (
+      check.details !== null &&
+      (typeof check.details !== "string" || check.details.trim().length > 2_000)
+    ) {
+      throw invalidSandboxTestInput("Os detalhes de uma verificação excedem 2.000 caracteres.");
+    }
+    if (check.status !== "passed" && check.status !== "failed") {
+      throw invalidSandboxTestInput("O resultado de uma verificação é inválido.");
+    }
+    if (check.checkId !== undefined) {
+      if (!isServerOpaqueId(check.checkId) || suppliedCheckIds.has(check.checkId)) {
+        throw invalidSandboxTestInput("Os identificadores das verificações devem ser válidos e únicos.");
+      }
+      suppliedCheckIds.add(check.checkId);
+    }
+  }
+  const hasFailedCheck = input.checks.some((check) => check.status === "failed");
+  if (
+    (input.status === "passed" && hasFailedCheck) ||
+    (input.status === "failed" && !hasFailedCheck)
+  ) {
+    throw invalidSandboxTestInput("O resultado geral precisa corresponder aos resultados das verificações.");
+  }
+  const startedAt = Date.parse(input.startedAt);
+  const completedAt = Date.parse(input.completedAt);
+  if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt) || completedAt < startedAt) {
+    throw invalidSandboxTestInput("A janela de execução do teste é inválida.");
+  }
+}
+
+function assertRecordedTestTargetsRequestedRevision(
+  changeSet: StudioChangeSetDto,
+  input: StudioSandboxTestInput,
+): void {
+  const recordedTest = changeSet.latestTest;
+  if (
+    recordedTest === null ||
+    recordedTest.revisionId !== input.revisionId ||
+    recordedTest.revisionDigest !== input.revisionDigest ||
+    recordedTest.status !== input.status ||
+    recordedTest.startedAt !== input.startedAt ||
+    recordedTest.completedAt !== input.completedAt
+  ) {
+    throw new StudioApiError(
+      502,
+      "invalid_test_binding_response",
+      "O servidor não vinculou o teste à revisão candidata informada.",
+    );
+  }
+}
+
+function parseAiProposalCandidate(value: unknown): StudioAiProposalCandidateDto {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw invalidAiProposalResponse();
+  }
+  const candidate = value as Record<string, unknown>;
+  const allowedKeys = new Set(["title", "explanation", "operations", "risks"]);
+  if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) {
+    throw invalidAiProposalResponse();
+  }
+  const title = typeof candidate.title === "string" ? candidate.title.trim() : "";
+  const explanation =
+    typeof candidate.explanation === "string" ? candidate.explanation.trim() : "";
+  const operations = ChangeOperationsSchema.safeParse(candidate.operations);
+  const risks = Array.isArray(candidate.risks)
+    ? candidate.risks.map((risk) => typeof risk === "string" ? risk.trim() : risk)
+    : null;
+  if (
+    !title ||
+    title.length > 120 ||
+    !explanation ||
+    explanation.length > 4_000 ||
+    !operations.success ||
+    operations.data.length === 0 ||
+    risks === null ||
+    risks.length > 8 ||
+    risks.some((risk) => typeof risk !== "string" || !risk || risk.length > 500)
+  ) {
+    throw invalidAiProposalResponse();
+  }
+  return { title, explanation, operations: operations.data, risks: risks as string[] };
+}
+
+function parseAiProposalResponse(value: Record<string, unknown>): StudioAiProposalDto {
+  const proposalId = value.proposalId;
+  const projectId = value.projectId;
+  const createdAt = value.createdAt;
+  const promptDigest = value.promptDigest;
+  const provider = value.provider;
+  const model = value.model;
+  const requestId = value.requestId;
+  const author = value.author;
+  if (
+    !isServerOpaqueId(proposalId) ||
+    !isServerOpaqueId(projectId) ||
+    typeof createdAt !== "string" ||
+    !Number.isFinite(Date.parse(createdAt)) ||
+    typeof promptDigest !== "string" ||
+    !/^[a-f0-9]{64}$/.test(promptDigest) ||
+    typeof provider !== "string" ||
+    provider.length < 1 ||
+    provider.length > 80 ||
+    typeof model !== "string" ||
+    model.length < 1 ||
+    model.length > 200 ||
+    (requestId !== null && (typeof requestId !== "string" || requestId.length < 1 || requestId.length > 200)) ||
+    typeof author !== "object" ||
+    author === null ||
+    Array.isArray(author)
+  ) {
+    throw invalidAiProposalResponse();
+  }
+  const authorRecord = author as Record<string, unknown>;
+  if (
+    !isServerOpaqueId(authorRecord.id) ||
+    typeof authorRecord.displayName !== "string" ||
+    authorRecord.displayName.trim().length < 1 ||
+    authorRecord.displayName.length > 80 ||
+    !["owner", "editor", "reviewer", "viewer"].includes(String(authorRecord.role))
+  ) {
+    throw invalidAiProposalResponse();
+  }
+  return {
+    proposalId,
+    projectId,
+    createdAt,
+    promptDigest,
+    author: {
+      id: authorRecord.id as string,
+      displayName: authorRecord.displayName.trim(),
+      role: authorRecord.role as StudioBackendRole,
+    },
+    provider,
+    model,
+    requestId: requestId as string | null,
+    candidate: parseAiProposalCandidate(value.candidate),
+  };
+}
+
+function invalidSandboxTestInput(message: string): StudioApiError {
+  return new StudioApiError(400, "invalid_sandbox_test_input", message);
+}
+
+function invalidAiProposalResponse(): StudioApiError {
+  return new StudioApiError(
+    502,
+    "invalid_ai_proposal_response",
+    "A IA não retornou uma proposta estruturada compatível com o Estúdio.",
+  );
+}
+
+function isServerOpaqueId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/.test(value);
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {

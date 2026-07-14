@@ -21,6 +21,43 @@ test("Verboo client keeps Bearer credentials server-side and forces advisory mod
       response.end(JSON.stringify({ data: [{ id: "model-one", owned_by: "verboo" }] }));
       return;
     }
+    const requestBody = requests.at(-1)?.body as {
+      response_format?: unknown;
+      messages?: Array<{ role: string; content: string }>;
+    };
+    if (requestBody.response_format) {
+      const unsafe = requestBody.messages?.at(-1)?.content.includes("insegura") ?? false;
+      response.end(
+        JSON.stringify({
+          id: "proposal-1",
+          model: "model-one",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  title: unsafe ? "Operação insegura" : "Ajustar velocidade",
+                  explanation: unsafe ? "Deve ser rejeitada." : "Mudança pequena para validar no sandbox.",
+                  risks: unsafe ? ["Tentativa de código arbitrário."] : ["Pode alterar o ritmo do jogo."],
+                  operations: unsafe
+                    ? [{ operationId: "unsafe-operation", kind: "code.run", script: "doSomething()" }]
+                    : [
+                        {
+                          operationId: "operation-speed",
+                          kind: "player.set-tuning",
+                          explanation: "Aumenta a velocidade dentro do limite.",
+                          tuning: { speed: 220 },
+                        },
+                      ],
+                }),
+              },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+      );
+      return;
+    }
     response.end(
       JSON.stringify({
         id: "reply-1",
@@ -42,12 +79,32 @@ test("Verboo client keeps Bearer credentials server-side and forces advisory mod
     const client = new VerbooClient(config);
     assert.deepEqual(await client.listModels(), [{ id: "model-one", ownedBy: "verboo" }]);
     assert.equal((await client.advisoryChat([{ role: "user", content: "Uma ideia" }])).content, "Sugestão segura");
-    assert.equal(requests.length, 2);
+    const generation = await client.proposeChange("Aumente um pouco a velocidade");
+    assert.equal(generation.candidate.operations[0]?.kind, "player.set-tuning");
+    assert.deepEqual(
+      { provider: generation.provider, model: generation.model, requestId: generation.requestId },
+      { provider: "verboo", model: "model-one", requestId: "proposal-1" },
+    );
+    assert.doesNotMatch(JSON.stringify(generation), /test-server-only-key/);
+    await assert.rejects(client.proposeChange("Crie uma operação insegura"), {
+      status: 502,
+      code: "invalid_ai_proposal",
+    });
+
+    assert.equal(requests.length, 4);
     assert.equal(requests[0]?.authorization, "Bearer test-server-only-key");
     const body = requests[1]?.body as { stream: boolean; messages: Array<{ role: string; content: string }> };
     assert.equal(body.stream, false);
     assert.equal(body.messages[0]?.role, "system");
     assert.match(body.messages[0]?.content ?? "", /não pode aplicar, promover ou publicar/);
+    const proposalBody = requests[2]?.body as {
+      stream: boolean;
+      response_format: { type: string };
+    };
+    assert.equal(proposalBody.stream, false);
+    assert.equal(proposalBody.response_format.type, "json_object");
+    const proposalMessages = (requests[2]?.body as { messages: Array<{ content: string }> }).messages;
+    assert.match(proposalMessages[0]?.content ?? "", /Siga exatamente este JSON Schema/);
   } finally {
     await new Promise<void>((resolve, reject) => upstream.close((error) => (error ? reject(error) : resolve())));
   }
