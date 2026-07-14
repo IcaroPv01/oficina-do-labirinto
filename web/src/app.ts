@@ -464,7 +464,7 @@ export async function mountApplication(root: HTMLElement): Promise<void> {
   elements.play.addEventListener("click", () => {
     gamePreview?.resume();
     previewPaused = false;
-    setStatus("Prévia em execução. Use WASD para mover e as setas para atirar.");
+    setStatus("Prévia em execução. Use o teclado ou os controles de toque para jogar.");
   });
   elements.pause.addEventListener("click", () => {
     if (previewPaused) {
@@ -539,10 +539,11 @@ function applicationTemplate(): string {
           <div class="editor-brand__mark" aria-hidden="true">◆</div>
           <div>
             <h1>Oficina do Labirinto</h1>
-            <p>Jogo e editor local, sem servidor</p>
+            <p>Jogo local e colaboração opcional pelo Estúdio</p>
           </div>
         </div>
         <div class="editor-topbar__actions">
+          <a class="button-like" href="?studio=1" data-testid="open-studio">Abrir Estúdio</a>
           <button class="button--quiet" type="button" data-testid="undo" title="Desfazer mudança" disabled>↶ Desfazer</button>
           <button class="button--quiet" type="button" data-testid="redo" title="Refazer mudança" disabled>↷ Refazer</button>
           <button type="button" data-testid="export-project">Exportar .gamepack</button>
@@ -603,7 +604,7 @@ function applicationTemplate(): string {
           <p class="field-help">Até 75 mudanças podem ser desfeitas nesta sessão. Importar um projeto inicia um novo histórico.</p>
           <hr class="editor-divider">
           <h3>Colaboração</h3>
-          <p class="field-help">Exporte o gamepack para enviá-lo ao colaborador. Quem tiver o repositório aplica o arquivo numa branch e abre um pull request. Nada é enviado automaticamente.</p>
+          <p class="field-help">Use o Estúdio para conversar e acompanhar propostas no projeto compartilhado. Exporte o gamepack somente como cópia de emergência; nada é publicado sem teste, aprovação e pull request.</p>
         </aside>
 
         <section class="preview-workspace" aria-labelledby="preview-title">
@@ -619,7 +620,7 @@ function applicationTemplate(): string {
             </div>
           </div>
           <div class="game-preview" data-testid="game-preview" aria-label="Área do jogo"></div>
-          <p class="preview-controls" id="preview-controls">Clique no jogo para controlar. WASD move e usa portas; setas atiram; Espaço interage na loja e após o chefe; Esc pausa; R reinicia.</p>
+          <p class="preview-controls" id="preview-controls">No computador: clique no jogo; WASD move e usa portas; setas atiram; Espaço interage; Esc pausa; R reinicia. No celular, use os dois controles direcionais e os botões abaixo do jogo.</p>
           <div class="preview-metrics" aria-label="Estado da partida"></div>
         </section>
 

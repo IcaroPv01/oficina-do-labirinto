@@ -1,10 +1,16 @@
 import Phaser from "phaser";
 
+import "./touchControls.css";
+
 import type { GameProject } from "../core";
 import type { GamePreviewOptions } from "./contracts";
 import { CoreSimulationPort } from "./coreSimulationPort";
 import { PreviewScene } from "./PreviewScene";
 import { GAME_HEIGHT, GAME_WIDTH } from "./roomBackdrop";
+import {
+  createGameTouchControls,
+  type GameTouchControlsHandle,
+} from "./touchControls";
 
 export type {
   GamePreviewAnnouncement,
@@ -29,6 +35,8 @@ export function createGamePreview(
   project: GameProject,
   options: GamePreviewOptions = {},
 ): GamePreviewHandle {
+  const stage = document.createElement("div");
+  stage.className = "game-preview__stage";
   const host = document.createElement("div");
   host.className = "game-preview__canvas-host";
   host.style.width = "100%";
@@ -38,9 +46,37 @@ export function createGamePreview(
   host.style.overflow = "hidden";
   host.setAttribute("role", "region");
   host.setAttribute("aria-label", "Estado atual da prévia jogável");
-  container.replaceChildren(host);
 
-  const scene = new PreviewScene(new CoreSimulationPort(), project, options);
+  let touchControlHandle: GameTouchControlsHandle | null = null;
+  const scene = new PreviewScene(new CoreSimulationPort(), project, {
+    ...options,
+    onStatusChange(status) {
+      touchControlHandle?.setPaused(status.phase === "paused");
+      options.onStatusChange?.(status);
+    },
+  });
+  const touchControls = createGameTouchControls(document, {
+    onMove(direction, active) {
+      scene.setVirtualMove(direction, active);
+    },
+    onAim(direction, active) {
+      scene.setVirtualAim(direction, active);
+    },
+    onAction() {
+      scene.triggerVirtualAction();
+    },
+    onPause() {
+      scene.togglePreviewPaused();
+    },
+    onRestart() {
+      scene.restartPreview();
+    },
+  });
+  touchControlHandle = touchControls.handle;
+  touchControlHandle.setPaused(false);
+  stage.append(host, touchControls.element);
+  container.replaceChildren(stage);
+
   const game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: host,
@@ -89,13 +125,16 @@ export function createGamePreview(
       if (game.scene.isActive(scene)) {
         scene.dispose();
       }
+      touchControlHandle?.destroy();
+      touchControlHandle = null;
       game.destroy(true);
-      host.remove();
+      stage.remove();
       delete container.dataset["gameStatus"];
       delete container.dataset["gameSeed"];
       delete container.dataset["gameHealth"];
       delete container.dataset["gameEnemies"];
       delete container.dataset["gameProjectiles"];
+      delete container.dataset["gameElapsedMs"];
       delete container.dataset["gamePlayerX"];
       delete container.dataset["gamePlayerY"];
       delete container.dataset["gameFloor"];

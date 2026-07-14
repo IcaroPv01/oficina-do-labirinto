@@ -2,27 +2,30 @@
 
 ## Preparação
 
-1. O proprietário cria o repositório no GitHub e adiciona o amigo como
-   colaborador.
+1. O proprietário cria o repositório no GitHub, mas ainda não adiciona o amigo
+   como colaborador.
 2. A branch `main` recebe proteção: pull request obrigatório e checks de CI.
 3. GitHub Pages usa a origem **GitHub Actions**.
+4. O amigo entra primeiro como **Coautor do Estúdio**, sem credenciais do
+   repositório. A colaboração GitHub será o último passo, depois de o fluxo
+   proposta, sandbox, aprovação e rollback estar comprovado.
 
-## Trabalho diário
+## Recuperação de emergência
 
-1. Atualize `main` antes de começar.
-2. Crie uma branch pequena, por exemplo `content/inimigo-morcego`.
-3. Abra o editor local ou a versão publicada.
-4. Importe o projeto, altere e teste no preview.
-5. Exporte o `.gamepack` e aplique-o ao conteúdo versionado:
+O `.gamepack` não é o transporte diário entre as duas pessoas. Ele existe para
+backup, recuperação e importação de um projeto legado. Quando necessário:
+
+1. exporte uma cópia no editor;
+2. guarde-a fora do repositório;
+3. para restaurá-la no conteúdo versionado, aplique-a numa branch isolada:
 
    ```powershell
    npm run content:apply -- C:\caminho\meu-projeto.gamepack
    ```
 
-6. Revise a alteração em `game-data/default-project.json`.
-7. Execute `npm run check`.
-8. Faça commit e abra um pull request.
-9. Mescle somente após validação e revisão.
+4. revise `game-data/default-project.json`;
+5. execute `npm run check` e abra um pull request;
+6. mescle somente após validação e revisão.
 
 ## Regras para evitar conflitos
 
@@ -38,16 +41,35 @@ O editor não grava diretamente no GitHub. Isso evita colocar credenciais no
 JavaScript público e mantém revisão e histórico como parte obrigatória do
 processo.
 
+## Trabalho diário no Estúdio
+
+O Estúdio já fornece convite, sessão, projeto, chat, presença, IA consultiva e
+revisão segura de propostas. O fluxo-alvo, concluído por etapas, é:
+
+1. entre no Estúdio e crie uma proposta;
+2. descreva o objetivo e o motivo da mudança;
+3. edite o rascunho compartilhado ou adicione um resultado candidato da IA;
+4. marque a revisão como pronta para teste;
+5. teste exatamente essa revisão no sandbox e registre evidências;
+6. o dono solicita ajustes, rejeita ou aprova;
+7. a automação futura cria branch e pull request;
+8. CI, revisão e proteção da `main` controlam a publicação.
+
+O jogo publicado nunca é substituído por autosave ou chat. Uma edição posterior
+invalida testes e aprovações anteriores. Consulte `STUDIO_ARCHITECTURE.md`.
+
 ## Publicação inicial
 
 1. Defina o nome, a visibilidade e a licença do repositório.
 2. Confirme a proveniência dos assets que serão versionados.
 3. Adicione o remoto e envie `main` e a tag `legacy-antigravity`.
 4. No GitHub, selecione **GitHub Actions** como origem do Pages.
-5. Adicione o colaborador, proteja `main` exigindo o check `validate` e limite
-   o ambiente `github-pages` à branch `main`.
+5. Proteja `main` exigindo o check `validate` e limite o ambiente
+   `github-pages` à branch `main`.
 6. Faça uma mudança de teste por branch e confirme que o merge só publica após
    unitários, build e E2E passarem.
+7. Adicione o amigo como colaborador somente depois de validar três ciclos
+   completos pelo Estúdio e ensaiar uma restauração/rollback.
 
 Um project site comum (`proprietário/repositório`) recebe automaticamente a
 base `/<repositório>/`; um user site (`proprietário.github.io`) usa `/`. Para

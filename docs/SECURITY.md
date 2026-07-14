@@ -12,6 +12,32 @@
   válido, inclusive no comando que aplica conteúdo ao repositório.
 - HTML fornecido pelo projeto nunca é inserido com `innerHTML`.
 
+## Estúdio compartilhado
+
+- GitHub Pages nunca contém chave da Verboo, token GitHub, segredo de sessão ou
+  credencial do túnel.
+- A chave da Verboo existe apenas na configuração local do `studio-server`, em
+  arquivo ignorado pelo Git ou no gerenciador de segredos do sistema.
+- Chamadas de IA partem do backend autenticado. O navegador recebe somente a
+  resposta filtrada ou uma proposta validável.
+- A IA não recebe shell, filesystem, aprovação, publicação ou escrita em
+  `main`.
+- Convites são de uso único e sessões podem ser revogadas.
+- O token descartável de convite aparece somente no fragmento `#invite` e é
+  removido da barra após o resgate; ele não vai para o Pages, referrer ou logs
+  HTTP. A URL do servidor não contém credenciais.
+- Cookies externos usam `HttpOnly`, `Secure`, `SameSite=None` e `Partitioned`;
+  mutações REST ainda exigem o token CSRF mantido apenas em memória.
+- Toda aprovação referencia o digest exato da revisão testada; qualquer edição
+  posterior invalida a aprovação.
+- Assets candidatos ficam em quarentena e repetem validação, reencodificação,
+  hash e conferência de proveniência antes de serem promovidos.
+- Código gerado não executa no processo do servidor. A primeira versão aceita
+  apenas operações de domínio e comportamentos declarativos limitados.
+- O serviço escuta em loopback e é exposto somente pelo túnel autenticado; não
+  se abrem portas no roteador.
+- Logs devem redigir cabeçalhos de autenticação, cookies, tokens e chaves.
+
 ## Protótipo legado
 
 `src/web_launcher.py` é apenas referência e não deve ser exposto na rede. Não

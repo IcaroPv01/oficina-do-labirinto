@@ -52,6 +52,8 @@ export class PreviewScene extends Phaser.Scene {
   private fixedRemainderMs = 0;
   private pendingTransition: RunDirection | null = null;
   private pendingAction: RunAction | null = null;
+  private readonly virtualMove = new Set<RunDirection>();
+  private readonly virtualAim = new Set<RunDirection>();
   private backdropStateKey = "";
   private lastFeedbackMessage = "";
   private disposed = false;
@@ -83,7 +85,7 @@ export class PreviewScene extends Phaser.Scene {
     canvas.setAttribute("role", "application");
     canvas.setAttribute(
       "aria-label",
-      "Prévia jogável da expedição. Clique para controlar com o teclado.",
+      "Prévia jogável da expedição. Use o teclado ou os controles de toque abaixo do jogo.",
     );
     canvas.setAttribute("aria-describedby", "preview-controls");
     canvas.setAttribute(
@@ -100,7 +102,7 @@ export class PreviewScene extends Phaser.Scene {
   }
 
   public override update(_time: number, delta: number): void {
-    if (this.disposed || !this.frame || !this.keys || !this.hasKeyboardFocus()) {
+    if (this.disposed || !this.frame || !this.hasInputContext()) {
       return;
     }
 
@@ -175,6 +177,25 @@ export class PreviewScene extends Phaser.Scene {
     this.renderFrame(this.frame, true);
   }
 
+  public togglePreviewPaused(): void {
+    this.setPreviewPaused(!this.previewPaused);
+  }
+
+  public setVirtualMove(direction: RunDirection, active: boolean): void {
+    this.setVirtualDirection(this.virtualMove, direction, active);
+    if (active) {
+      this.queueRoomTransition(direction);
+    }
+  }
+
+  public setVirtualAim(direction: RunDirection, active: boolean): void {
+    this.setVirtualDirection(this.virtualAim, direction, active);
+  }
+
+  public triggerVirtualAction(): void {
+    this.queueContextAction();
+  }
+
   public dispose(): void {
     if (this.disposed) {
       return;
@@ -195,6 +216,8 @@ export class PreviewScene extends Phaser.Scene {
     this.entities = null;
     this.hud = null;
     this.keys = null;
+    this.virtualMove.clear();
+    this.virtualAim.clear();
     this.frame = null;
     this.emitStatus("destroyed");
   }
@@ -250,32 +273,60 @@ export class PreviewScene extends Phaser.Scene {
   }
 
   private queueTransition(direction: RunDirection, event: KeyboardEvent): void {
-    if (
-      event.repeat ||
-      !this.hasKeyboardFocus() ||
-      !this.frame?.model.roomCleared ||
-      hasCollectiblePickup(this.frame.model) ||
-      this.isTerminal(this.frame.model.phase)
-    ) {
+    if (event.repeat || !this.hasKeyboardFocus()) {
       return;
     }
-    event.preventDefault();
-    this.pendingTransition ??= direction;
+    if (this.queueRoomTransition(direction)) {
+      event.preventDefault();
+    }
   }
 
   private handleActionKey(event: KeyboardEvent): void {
     if (event.repeat || !this.hasKeyboardFocus() || !this.frame || this.isTerminal(this.frame.model.phase)) {
       return;
     }
+    if (this.queueContextAction()) {
+      event.preventDefault();
+    }
+  }
+
+  private queueContextAction(): boolean {
+    if (!this.frame || this.isTerminal(this.frame.model.phase)) {
+      return false;
+    }
     const { roomKind } = this.frame.model;
     if (roomKind !== "shop" && roomKind !== "boss") {
-      return;
+      return false;
     }
-    event.preventDefault();
     if (roomKind === "boss" && !this.frame.model.roomCleared) {
-      return;
+      return false;
     }
     this.pendingAction ??= roomKind === "shop" ? "buy-heart" : "descend";
+    return true;
+  }
+
+  private queueRoomTransition(direction: RunDirection): boolean {
+    if (
+      !this.frame?.model.roomCleared ||
+      hasCollectiblePickup(this.frame.model) ||
+      this.isTerminal(this.frame.model.phase)
+    ) {
+      return false;
+    }
+    this.pendingTransition ??= direction;
+    return true;
+  }
+
+  private setVirtualDirection(
+    target: Set<RunDirection>,
+    direction: RunDirection,
+    active: boolean,
+  ): void {
+    if (active) {
+      target.add(direction);
+    } else {
+      target.delete(direction);
+    }
   }
 
   private resetSimulation(): void {
@@ -283,6 +334,8 @@ export class PreviewScene extends Phaser.Scene {
     this.fixedRemainderMs = 0;
     this.pendingTransition = null;
     this.pendingAction = null;
+    this.virtualMove.clear();
+    this.virtualAim.clear();
     this.backdropStateKey = "";
     this.lastFeedbackMessage = "";
     this.presentation = readProjectPresentation(this.project);
@@ -309,22 +362,19 @@ export class PreviewScene extends Phaser.Scene {
     readonly transition: null;
     readonly action: null;
   } {
-    if (!this.keys) {
-      return {
-        moveX: 0,
-        moveY: 0,
-        aimX: 0,
-        aimY: 0,
-        fire: false,
-        transition: null,
-        action: null,
-      };
-    }
-
-    const moveX = Number(this.keys.moveRight.isDown) - Number(this.keys.moveLeft.isDown);
-    const moveY = Number(this.keys.moveDown.isDown) - Number(this.keys.moveUp.isDown);
-    const aimX = Number(this.keys.fireRight.isDown) - Number(this.keys.fireLeft.isDown);
-    const aimY = Number(this.keys.fireDown.isDown) - Number(this.keys.fireUp.isDown);
+    const keyboardActive = this.keys !== null && this.hasKeyboardFocus();
+    const moveX =
+      Number(this.virtualMove.has("east") || (keyboardActive && this.keys?.moveRight.isDown)) -
+      Number(this.virtualMove.has("west") || (keyboardActive && this.keys?.moveLeft.isDown));
+    const moveY =
+      Number(this.virtualMove.has("south") || (keyboardActive && this.keys?.moveDown.isDown)) -
+      Number(this.virtualMove.has("north") || (keyboardActive && this.keys?.moveUp.isDown));
+    const aimX =
+      Number(this.virtualAim.has("east") || (keyboardActive && this.keys?.fireRight.isDown)) -
+      Number(this.virtualAim.has("west") || (keyboardActive && this.keys?.fireLeft.isDown));
+    const aimY =
+      Number(this.virtualAim.has("south") || (keyboardActive && this.keys?.fireDown.isDown)) -
+      Number(this.virtualAim.has("north") || (keyboardActive && this.keys?.fireUp.isDown));
     return {
       moveX,
       moveY,
@@ -433,6 +483,7 @@ export class PreviewScene extends Phaser.Scene {
     parent.dataset["gameHealth"] = String(snapshot.health);
     parent.dataset["gameEnemies"] = String(snapshot.enemyCount);
     parent.dataset["gameProjectiles"] = String(snapshot.projectileCount);
+    parent.dataset["gameElapsedMs"] = String(Math.round(snapshot.elapsedTimeMs));
     parent.dataset["gamePlayerX"] = String(Math.round(snapshot.playerPosition.x));
     parent.dataset["gamePlayerY"] = String(Math.round(snapshot.playerPosition.y));
     parent.dataset["gameFloor"] = String(snapshot.floor);
@@ -450,7 +501,7 @@ export class PreviewScene extends Phaser.Scene {
     }
 
     const canvas = this.game.canvas;
-    const canvasLabel = `${semanticLabel} Use WASD para mover, setas para atirar, espaço para interagir, Escape para pausar e R para reiniciar.`;
+    const canvasLabel = `${semanticLabel} Use WASD para mover, setas para atirar, espaço para interagir, Escape para pausar e R para reiniciar. Em telas de toque, use os controles abaixo do jogo.`;
     if (canvas.getAttribute("aria-label") !== canvasLabel) {
       canvas.setAttribute("aria-label", canvasLabel);
     }
@@ -474,6 +525,18 @@ export class PreviewScene extends Phaser.Scene {
     const active = document.activeElement;
     const canvas = this.game.canvas;
     return active === canvas || (active instanceof HTMLElement && canvas.parentElement?.contains(active) === true);
+  }
+
+  private hasInputContext(): boolean {
+    if (this.virtualMove.size > 0 || this.virtualAim.size > 0) {
+      return true;
+    }
+    const active = document.activeElement;
+    const stage = this.game.canvas.closest(".game-preview__stage");
+    return (
+      active === this.game.canvas ||
+      (active instanceof HTMLElement && stage?.contains(active) === true)
+    );
   }
 
   private focusCanvas(): void {

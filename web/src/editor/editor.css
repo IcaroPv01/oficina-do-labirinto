@@ -412,13 +412,27 @@
 }
 
 @media (max-width: 720px) {
+  html,
+  body,
+  #app {
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
   .editor-topbar {
     align-items: flex-start;
     flex-direction: column;
+    padding-top: max(0.75rem, env(safe-area-inset-top));
   }
 
   .editor-topbar__actions {
     width: 100%;
+  }
+
+  .editor-topbar__actions > * {
+    flex: 1 1 8rem;
+    justify-content: center;
+    text-align: center;
   }
 
   .editor-layout {
@@ -427,7 +441,7 @@
 
   .preview-workspace {
     grid-row: 1;
-    min-height: 32rem;
+    min-height: 0;
   }
 
   .editor-panel {
@@ -440,7 +454,8 @@
   }
 
   .game-preview {
-    min-height: 20rem;
+    min-height: 0;
+    padding: 0.35rem;
   }
 
   .field-row {
@@ -449,5 +464,26 @@
 
   .save-state {
     display: none;
+  }
+
+  .editor-field input,
+  .editor-field select {
+    min-height: 2.75rem;
+    font-size: 1rem;
+  }
+
+  .status-bar {
+    padding-bottom: max(0.55rem, env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 360px) {
+  .editor-layout,
+  .preview-workspace {
+    padding-inline: 0.35rem;
+  }
+
+  .game-preview {
+    padding-inline: 0.15rem;
   }
 }

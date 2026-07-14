@@ -1,5 +1,11 @@
 import { expect, test } from "@playwright/test";
 import defaultProject from "../../game-data/default-project.json" with { type: "json" };
+import {
+  installStudioBackendMock,
+  studioInvitation,
+  studioInvitationUrl,
+  studioProject,
+} from "./studio-backend.fixture";
 
 test("abre o editor e monta uma prévia jogável", async ({ page }) => {
   await page.goto("./");
@@ -7,6 +13,42 @@ test("abre o editor e monta uma prévia jogável", async ({ page }) => {
   await expect(page.getByTestId("app-ready")).toBeVisible();
   await expect(page.getByTestId("game-preview").locator("canvas")).toBeVisible();
   await expect(page.getByTestId("status")).not.toBeEmpty();
+  await expect(page.getByTestId("open-studio")).toHaveAttribute(
+    "href",
+    "?studio=1",
+  );
+});
+
+test("resgata convite pelo fragmento e abre o Estúdio autenticado", async ({
+  page,
+}) => {
+  await installStudioBackendMock(page);
+  await page.goto(studioInvitationUrl());
+  await expect(page.getByRole("heading", { name: "Entrar pelo convite" })).toBeVisible();
+  await page.getByLabel("Nome exibido no Estúdio").fill("Parceiro móvel");
+  await page.getByRole("button", { name: "Aceitar convite" }).click();
+
+  await expect(page.locator("[data-studio-shell='ready']")).toBeVisible();
+  await expect(page.getByRole("heading", { name: studioProject.name })).toBeVisible();
+  expect(page.url()).not.toContain(studioInvitation);
+  await expect(page.getByLabel("Modelo da assistente IA")).toContainText(
+    "DeepSeek V4 Flash",
+  );
+
+  await page.getByRole("tab", { name: "Conversa" }).click();
+  const humanChat = page.getByRole("tabpanel", { name: "Conversa" });
+  await humanChat.getByPlaceholder(/Escreva uma mensagem/).fill("Fechei a nova sala.");
+  await humanChat.getByRole("button", { name: "Enviar" }).click();
+  await expect(humanChat).toContainText("Fechei a nova sala.");
+
+  await page.getByRole("tab", { name: "Assistente IA" }).click();
+  const assistant = page.getByRole("tabpanel", { name: "Assistente IA" });
+  await assistant.getByPlaceholder(/proponha uma patrulha/).fill("Explique um movimento simples.");
+  await assistant.getByRole("button", { name: "Enviar pedido" }).click();
+  await expect(assistant).toContainText("nada foi aplicado ao jogo");
+
+  await page.getByRole("button", { name: "Encerrar sessão" }).click();
+  await expect(page.getByTestId("app-ready")).toBeVisible();
 });
 
 test("edita o projeto, reinicia e exporta um gamepack", async ({ page }) => {
@@ -46,6 +88,11 @@ test("move, atira, pausa e retoma pelo preview", async ({ page }) => {
   await page.waitForTimeout(80);
   await page.keyboard.up("ArrowRight");
   expect(Number(await host.getAttribute("data-game-projectiles"))).toBeGreaterThan(0);
+
+  await page.getByTestId("project-name").click();
+  const elapsedWhileEditing = await host.getAttribute("data-game-elapsed-ms");
+  await page.waitForTimeout(250);
+  await expect(host).toHaveAttribute("data-game-elapsed-ms", elapsedWhileEditing ?? "0");
 
   await page.getByTestId("pause-game").click();
   await expect(host).toHaveAttribute("data-game-status", "paused");
