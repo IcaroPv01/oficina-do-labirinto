@@ -1,4 +1,4 @@
-# Projeto de jogo colaborativo
+# Oficina do Labirinto
 
 Este repositório está sendo reconstruído como um jogo e editor web estáticos,
 publicáveis no GitHub Pages e utilizáveis em computadores modestos.
@@ -10,6 +10,10 @@ publicáveis no GitHub Pages e utilizáveis em computadores modestos.
 - `web/` é o produto principal: Phaser 4, TypeScript e Vite.
 - `game-data/` contém o conteúdo versionado e validado.
 - `schemas/` contém os contratos dos arquivos de projeto.
+- `packages/studio-contracts/` contém as operações, revisões e regras de
+  aprovação compartilhadas pelo navegador e pelo servidor.
+- `studio-server/` contém convites, sessões, sincronização, chat, propostas e
+  o gateway privado da Verboo para o computador de casa.
 - `docs/` registra arquitetura, decisões e critérios de aceite.
 
 O Flask, o launcher Tkinter e o executável PyInstaller não fazem parte da
@@ -25,13 +29,17 @@ conclusão da auditoria de licença e proveniência. O código original deste
 repositório é distribuído sob a licença MIT; componentes de terceiros mantêm
 suas próprias licenças e avisos.
 
-## Meta de colaboração
+## Colaboração
 
-1. O editor web salva automaticamente no navegador.
-2. Um projeto pode ser importado e exportado como pacote portátil.
-3. Cada colaborador trabalha em sua própria branch.
-4. Pull requests executam validação, testes e build.
-5. O merge em `main` publica o jogo no GitHub Pages.
+O botão **Abrir Estúdio** leva à interface compartilhada. Ela já suporta
+convite de uso único, projeto completo, presença, chat humano, conversa
+consultiva com a Verboo, propostas, testes registrados e aprovação da revisão
+exata pelo dono. O jogo publicado continua estático no GitHub Pages e funciona
+mesmo quando o servidor doméstico está desligado.
+
+O `.gamepack` permanece como cópia de emergência. Edição estruturada no
+sandbox, promoção automática por branch/PR e assets gerados pela IA estão
+registrados como próximos gates no [ROADMAP.md](ROADMAP.md).
 
 ## Executar localmente
 
@@ -53,6 +61,25 @@ npm run test:e2e
 
 O build estático é produzido em `web/dist/`.
 
+## Executar o Estúdio
+
+Na primeira instalação do computador que hospedará o serviço:
+
+```powershell
+.\scripts\configure-studio.ps1
+npm run studio:invite -- --role owner --hours 24
+npm run studio:dev
+```
+
+O script pede a chave da Verboo sem exibi-la e grava somente o arquivo local
+ignorado `studio-server/.env.local`. O token de convite aparece uma única vez;
+ele deve entrar apenas no fragmento `#invite=...` do link do Estúdio. A chave
+da API nunca entra no link, no navegador ou no Git.
+
+Para acesso externo, o servidor deve continuar em `127.0.0.1` e ser exposto
+por um túnel HTTPS iniciado pelo próprio computador, sem abrir portas no
+roteador. Consulte [docs/STUDIO_ARCHITECTURE.md](docs/STUDIO_ARCHITECTURE.md).
+
 Para transformar um `.gamepack` exportado pelo editor no conteúdo padrão que o
 próximo build publicará:
 
@@ -72,7 +99,9 @@ O próximo gate amplia a edição visual de conteúdo: múltiplos arquétipos de
 inimigo, itens, salas desenhadas pelo usuário, áudio e migrações de schema. O
 protótipo legado permanece apenas como referência.
 
-Consulte [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) para a arquitetura-alvo e
+O estado executável e a ordem das próximas tarefas ficam centralizados no
+[ROADMAP.md](ROADMAP.md). Consulte [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+para a arquitetura-alvo e
 [docs/ANTIGRAVITY_CONTEXT.md](docs/ANTIGRAVITY_CONTEXT.md) para o histórico que
 orienta a reconstrução. O fluxo de duas pessoas está em
 [docs/COLLABORATION.md](docs/COLLABORATION.md) e as restrições de segurança em

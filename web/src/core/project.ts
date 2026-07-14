@@ -1,3 +1,4 @@
+import { EnemyBehaviorV1Schema } from "@collaborative-roguelike/studio-contracts";
 import { z } from "zod";
 import defaultProjectJson from "../../../game-data/default-project.json";
 
@@ -68,6 +69,7 @@ export const GameProjectSchema = z
         spawnCount: z.number().int().min(1).max(20),
         contactDamage: z.number().int().min(1).max(10),
         dropChance: z.number().min(0).max(1),
+        behavior: EnemyBehaviorV1Schema.optional(),
       })
       .strict(),
     run: z
@@ -126,7 +128,12 @@ export function cloneGameProject(project: GameProject): GameProject {
         ? { ...project.player.skinMetadata }
         : null,
     },
-    enemy: { ...project.enemy },
+    enemy: {
+      ...project.enemy,
+      ...(project.enemy.behavior === undefined
+        ? {}
+        : { behavior: EnemyBehaviorV1Schema.parse(project.enemy.behavior) }),
+    },
     run: { ...project.run },
     world: { ...project.world },
   };

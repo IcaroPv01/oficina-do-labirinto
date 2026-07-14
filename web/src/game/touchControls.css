@@ -1,0 +1,177 @@
+.game-preview__stage {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 0.55rem;
+  justify-items: center;
+}
+
+.game-touch-controls {
+  display: none;
+  width: min(100%, 42rem);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: clamp(0.45rem, 2vw, 0.9rem);
+  align-items: end;
+  padding: 0.25rem;
+  padding-left: max(0.25rem, env(safe-area-inset-left));
+  padding-right: max(0.25rem, env(safe-area-inset-right));
+  padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.game-touch-pad {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(2.75rem, 1fr));
+  grid-template-rows: auto repeat(3, 2.75rem);
+  gap: 0.2rem;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.game-touch-pad legend {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin-bottom: 0.15rem;
+  color: #bdc9e8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.game-touch-pad__button,
+.game-touch-action {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  border-color: rgb(129 156 255 / 68%);
+  padding: 0.35rem;
+  background: rgb(24 34 58 / 92%);
+  box-shadow: 0 0.25rem 0.9rem rgb(0 0 0 / 25%);
+  touch-action: none;
+}
+
+.game-touch-pad__button {
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+
+.game-touch-pad__button[data-direction="north"] {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.game-touch-pad__button[data-direction="west"] {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.game-touch-pad__button[data-direction="east"] {
+  grid-column: 3;
+  grid-row: 3;
+}
+
+.game-touch-pad__button[data-direction="south"] {
+  grid-column: 2;
+  grid-row: 4;
+}
+
+.game-touch-pad__button[data-pressed="true"] {
+  border-color: #ffd477;
+  background: #40589f;
+  /* Preserve the full touch target while still giving tactile visual feedback. */
+  transform: translateY(1px);
+}
+
+.game-touch-actions {
+  display: grid;
+  gap: 0.35rem;
+  align-self: center;
+}
+
+.game-touch-action {
+  min-width: 4.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+@media (hover: none), (pointer: coarse), (any-pointer: coarse), (max-width: 720px) {
+  .game-touch-controls {
+    display: grid;
+  }
+
+  .game-preview:has(.game-touch-controls) {
+    overflow: visible;
+  }
+
+  .preview-controls {
+    font-size: 0.78rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .game-touch-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.25rem;
+    padding-right: env(safe-area-inset-right);
+    padding-left: env(safe-area-inset-left);
+  }
+
+  .game-touch-actions {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .game-touch-pad {
+    grid-template-columns: repeat(3, 2.75rem);
+    grid-template-rows: auto repeat(3, 2.75rem);
+  }
+
+  .game-touch-pad__button,
+  .game-touch-action {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .game-touch-action {
+    min-width: 3rem;
+    padding-inline: 0.25rem;
+    font-size: 0.72rem;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 600px) and (hover: none),
+  (orientation: landscape) and (max-height: 600px) and (pointer: coarse),
+  (orientation: landscape) and (max-height: 600px) and (any-pointer: coarse) {
+  .game-preview__stage {
+    position: relative;
+  }
+
+  .game-touch-controls {
+    position: absolute;
+    inset: auto 0 0;
+    z-index: 4;
+    width: 100%;
+    pointer-events: none;
+  }
+
+  .game-touch-pad,
+  .game-touch-actions {
+    pointer-events: auto;
+  }
+
+  .game-touch-actions {
+    opacity: 0.82;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .game-touch-pad__button,
+  .game-touch-action {
+    transition: none;
+  }
+}

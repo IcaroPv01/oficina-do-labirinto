@@ -57,7 +57,8 @@
         "radius": { "type": "integer", "minimum": 8, "maximum": 40 },
         "spawnCount": { "type": "integer", "minimum": 1, "maximum": 20 },
         "contactDamage": { "type": "integer", "minimum": 1, "maximum": 10 },
-        "dropChance": { "type": "number", "minimum": 0, "maximum": 1 }
+        "dropChance": { "type": "number", "minimum": 0, "maximum": 1 },
+        "behavior": { "$ref": "#/$defs/enemyBehaviorV1" }
       }
     },
     "run": {
@@ -111,6 +112,221 @@
     "color": {
       "type": "string",
       "pattern": "^#[0-9a-fA-F]{6}$"
+    },
+    "studioId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*[A-Za-z0-9]$"
+    },
+    "behaviorStateId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 48,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "enemyMovement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "facePlayer"],
+          "properties": {
+            "kind": { "const": "idle" },
+            "facePlayer": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "speedMultiplier", "stopDistance", "requireLineOfSight"],
+          "properties": {
+            "kind": { "const": "chase" },
+            "speedMultiplier": { "type": "number", "minimum": 0.1, "maximum": 3 },
+            "stopDistance": { "type": "number", "minimum": 0, "maximum": 1000 },
+            "requireLineOfSight": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "speedMultiplier", "safeDistance"],
+          "properties": {
+            "kind": { "const": "flee" },
+            "speedMultiplier": { "type": "number", "minimum": 0.1, "maximum": 3 },
+            "safeDistance": { "type": "number", "minimum": 16, "maximum": 2000 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "speedMultiplier", "radius", "clockwise", "radialCorrection"],
+          "properties": {
+            "kind": { "const": "orbit" },
+            "speedMultiplier": { "type": "number", "minimum": 0.1, "maximum": 3 },
+            "radius": { "type": "number", "minimum": 16, "maximum": 1000 },
+            "clockwise": { "type": "boolean" },
+            "radialCorrection": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "speedMultiplier", "turnIntervalSeconds", "leashRadius"],
+          "properties": {
+            "kind": { "const": "wander" },
+            "speedMultiplier": { "type": "number", "minimum": 0.1, "maximum": 3 },
+            "turnIntervalSeconds": { "type": "number", "minimum": 0.1, "maximum": 20 },
+            "leashRadius": { "type": "number", "minimum": 16, "maximum": 2000 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "speedMultiplier", "waypoints", "loop"],
+          "properties": {
+            "kind": { "const": "patrol" },
+            "speedMultiplier": { "type": "number", "minimum": 0.1, "maximum": 3 },
+            "waypoints": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["offsetX", "offsetY", "pauseSeconds"],
+                "properties": {
+                  "offsetX": { "type": "number", "minimum": -2000, "maximum": 2000 },
+                  "offsetY": { "type": "number", "minimum": -2000, "maximum": 2000 },
+                  "pauseSeconds": { "type": "number", "minimum": 0, "maximum": 30 }
+                }
+              }
+            },
+            "loop": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "enemyAtomicCondition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "always" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "operator", "pixels"],
+          "properties": {
+            "kind": { "const": "distance-to-player" },
+            "operator": { "enum": ["lt", "lte", "gt", "gte"] },
+            "pixels": { "type": "number", "minimum": 0, "maximum": 4000 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "operator", "ratio"],
+          "properties": {
+            "kind": { "const": "health-ratio" },
+            "operator": { "enum": ["lt", "lte", "gt", "gte"] },
+            "ratio": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "seconds"],
+          "properties": {
+            "kind": { "const": "state-elapsed" },
+            "seconds": { "type": "number", "minimum": 0.05, "maximum": 120 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "visible"],
+          "properties": {
+            "kind": { "const": "line-of-sight" },
+            "visible": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "withinSeconds"],
+          "properties": {
+            "kind": { "const": "was-hit" },
+            "withinSeconds": { "type": "number", "minimum": 0.05, "maximum": 30 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "probability", "intervalSeconds"],
+          "properties": {
+            "kind": { "const": "random-chance" },
+            "probability": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+            "intervalSeconds": { "type": "number", "minimum": 0.1, "maximum": 60 }
+          }
+        }
+      ]
+    },
+    "enemyConditionGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "conditions"],
+      "properties": {
+        "mode": { "enum": ["all", "any"] },
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/enemyAtomicCondition" }
+        }
+      }
+    },
+    "enemyBehaviorTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transitionId", "toStateId", "when"],
+      "properties": {
+        "transitionId": { "$ref": "#/$defs/studioId" },
+        "toStateId": { "$ref": "#/$defs/behaviorStateId" },
+        "when": { "$ref": "#/$defs/enemyConditionGroup" }
+      }
+    },
+    "enemyBehaviorState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stateId", "movement", "transitions"],
+      "properties": {
+        "stateId": { "$ref": "#/$defs/behaviorStateId" },
+        "movement": { "$ref": "#/$defs/enemyMovement" },
+        "transitions": {
+          "type": "array",
+          "maxItems": 12,
+          "items": { "$ref": "#/$defs/enemyBehaviorTransition" }
+        }
+      }
+    },
+    "enemyBehaviorV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "kind", "entryStateId", "states"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "enemy-behavior" },
+        "entryStateId": { "$ref": "#/$defs/behaviorStateId" },
+        "states": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 24,
+          "items": { "$ref": "#/$defs/enemyBehaviorState" }
+        }
+      }
     }
   }
 }

@@ -84,8 +84,10 @@ describe("GameProject", () => {
       readonly properties: {
         readonly player: { readonly required: readonly string[] };
         readonly enemy: {
+          readonly required: readonly string[];
           readonly properties: {
             readonly name: { readonly pattern: string };
+            readonly behavior: { readonly $ref: string };
           };
         };
         readonly run: {
@@ -100,6 +102,10 @@ describe("GameProject", () => {
     expect(schema.required).not.toContain("run");
     expect(schema.properties.player.required).not.toContain("skinMetadata");
     expect(schema.properties.enemy.properties.name.pattern).toBe("\\S");
+    expect(schema.properties.enemy.required).not.toContain("behavior");
+    expect(schema.properties.enemy.properties.behavior.$ref).toBe(
+      "#/$defs/enemyBehaviorV1",
+    );
     expect(schema.properties.run.default).toEqual(DEFAULT_GAME_PROJECT.run);
     expect(schema.properties.run.properties.startingKeys.minimum).toBe(1);
   });
