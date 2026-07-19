@@ -2,6 +2,8 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   installStudioBackendMock,
   studioInvitationUrl,
+  studioProjectFileEntry,
+  studioProjectFileSource,
 } from "./studio-backend.fixture";
 
 test("joga por toque sem rolagem horizontal em retrato e paisagem", async ({
@@ -126,6 +128,48 @@ test("joga e testa a revisão candidata no celular em retrato e paisagem", async
   await shell.getByTestId("studio-run-sandbox-test").click();
   await expect(shell.getByRole("button", { name: "Aprovar para o jogo" }))
     .toBeEnabled();
+});
+
+test("explora e lê arquivo real no Estúdio em 320x700", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  await installStudioBackendMock(page);
+  await page.goto(studioInvitationUrl());
+  await page.getByLabel("Nome exibido no Estúdio").fill("Leitor móvel");
+  await page.getByRole("button", { name: "Aceitar convite" }).click();
+
+  const shell = page.locator("[data-studio-shell='ready']");
+  await shell
+    .getByRole("button", { name: /Projeto/ })
+    .click();
+  await expect(shell).toHaveAttribute("data-mobile-view", "project");
+  await expect(
+    shell.getByRole("heading", { name: "Arquivos do projeto" }),
+  ).toBeVisible();
+  await shell.getByLabel("Buscar arquivos do projeto").fill("main.ts");
+  const fileButton = shell.locator(
+    `[data-project-file-path="${studioProjectFileEntry.path}"]`,
+  );
+  await expect(fileButton).toBeVisible();
+  await fileButton.click();
+
+  await expect(shell).toHaveAttribute("data-project-files-pane", "viewer");
+  await expect(shell.getByRole("heading", { name: "main.ts" })).toBeVisible();
+  await expect(shell.getByText(studioProjectFileEntry.path, { exact: true }))
+    .toBeVisible();
+  await expect(shell.getByText(studioProjectFileEntry.sha256, { exact: true }))
+    .toBeVisible();
+  await expect(
+    shell.getByText(studioProjectFileSource.split("\n")[0]!, { exact: true }),
+  ).toBeVisible();
+  await expect(shell.getByText(/Somente leitura/)).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  await shell.getByRole("button", { name: "Voltar aos arquivos" }).click();
+  await expect(shell).toHaveAttribute("data-project-files-pane", "tree");
+  await expect(
+    shell.locator(`[data-project-file-path="${studioProjectFileEntry.path}"]`),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expectNoHorizontalOverflow(page);
 });
 
 for (const viewport of [

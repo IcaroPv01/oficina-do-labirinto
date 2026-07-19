@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import { isIP, type AddressInfo } from "node:net";
 import {
   authenticate,
   clearSessionCookie,
@@ -21,6 +21,7 @@ import { canCreateInvite, canEdit, parseWorkspaceRole } from "./contracts.js";
 import { StudioDatabase } from "./database.js";
 import { HttpError } from "./errors.js";
 import { logger } from "./logger.js";
+import { ProjectFileService } from "./project-files.js";
 import { ConcurrencyGate, FixedWindowRateLimiter } from "./rate-limit.js";
 import { integerField, opaqueId, optionalStringField, plainJsonObject, record, stringField } from "./validation.js";
 import { VerbooClient, type AdvisoryMessage } from "./verboo.js";
@@ -59,9 +60,11 @@ export function createStudioServer(config: StudioConfig, dependencies: ServerDep
   const ownsDatabase = !dependencies.database;
   const verboo = dependencies.verboo ?? new VerbooClient(config);
   const changeSets = new ChangeSetService(database);
+  const projectFiles = new ProjectFileService(config.projectRoot);
   const authRate = new FixedWindowRateLimiter(12, 15 * 60_000, "Muitas tentativas de autenticação");
   const writeRate = new FixedWindowRateLimiter(120, 60_000, "Muitas alterações em pouco tempo");
   const chatRate = new FixedWindowRateLimiter(30, 60_000, "Muitas mensagens de chat");
+  const projectFileRate = new FixedWindowRateLimiter(240, 60_000, "Muitas leituras de arquivos em pouco tempo");
   const aiRate = new FixedWindowRateLimiter(20, 60_000, "Muitas solicitações à IA");
   const aiGate = new ConcurrencyGate();
 
@@ -110,6 +113,7 @@ export function createStudioServer(config: StudioConfig, dependencies: ServerDep
       sendJson(response, 200, {
         status: "ok",
         service: "oficina-studio-server",
+        apiVersion: 1,
         aiConfigured: verboo.configured,
         now: new Date().toISOString(),
       });
@@ -185,6 +189,28 @@ export function createStudioServer(config: StudioConfig, dependencies: ServerDep
       assertSerializedSize(snapshot, config.maxSnapshotBytes);
       const created = database.createProject(name, snapshot, explanation, principal.user);
       sendJson(response, 201, created);
+      return;
+    }
+
+    const projectFileContentMatch = /^\/api\/projects\/([^/]+)\/files\/content$/.exec(url.pathname);
+    if (request.method === "GET" && projectFileContentMatch) {
+      const projectId = opaqueId(projectFileContentMatch[1] ?? "", "projectId");
+      requireSession(request, database, config);
+      projectFileRate.assertAllowed(remoteKey(request));
+      if (!database.getProject(projectId)) throw new HttpError(404, "project_not_found", "Projeto não encontrado");
+      const path = url.searchParams.get("path");
+      if (path === null) throw new HttpError(400, "invalid_project_file_path", "Parâmetro path é obrigatório");
+      sendJson(response, 200, await projectFiles.content(projectId, path));
+      return;
+    }
+
+    const projectFilesMatch = /^\/api\/projects\/([^/]+)\/files$/.exec(url.pathname);
+    if (request.method === "GET" && projectFilesMatch) {
+      const projectId = opaqueId(projectFilesMatch[1] ?? "", "projectId");
+      requireSession(request, database, config);
+      projectFileRate.assertAllowed(remoteKey(request));
+      if (!database.getProject(projectId)) throw new HttpError(404, "project_not_found", "Projeto não encontrado");
+      sendJson(response, 200, await projectFiles.manifest(projectId));
       return;
     }
 
@@ -622,7 +648,14 @@ function handleError(response: ServerResponse, error: unknown, requestId: string
 }
 
 function remoteKey(request: IncomingMessage): string {
-  return request.socket.remoteAddress ?? "unknown";
+  const socketAddress = request.socket.remoteAddress ?? "unknown";
+  if (!isLoopbackSocket(request.socket)) return socketAddress;
+
+  const cloudflareAddress = request.headers["cf-connecting-ip"];
+  if (typeof cloudflareAddress === "string" && isIP(cloudflareAddress) !== 0) {
+    return cloudflareAddress;
+  }
+  return socketAddress;
 }
 
 function safePath(rawUrl: string | undefined): string {

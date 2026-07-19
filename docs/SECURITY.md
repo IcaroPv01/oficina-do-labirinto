@@ -20,6 +20,8 @@
   arquivo ignorado pelo Git ou no gerenciador de segredos do sistema.
 - Chamadas de IA partem do backend autenticado. O navegador recebe somente a
   resposta filtrada ou uma proposta validável.
+- Toda resposta bem-sucedida do provedor é recusada se qualquer campo tentar
+  repetir a chave local exata; o erro público não contém o valor rejeitado.
 - Propostas da IA usam modo JSON no provedor e cruzam uma validação Zod
   estrita de operações de domínio; texto do modelo nunca é tratado como código.
 - O prompt bruto não é devolvido nem persistido. A auditoria append-only guarda
@@ -28,8 +30,9 @@
   `main`.
 - Convites são de uso único e sessões podem ser revogadas.
 - O token descartável de convite aparece somente no fragmento `#invite` e é
-  removido da barra após o resgate; ele não vai para o Pages, referrer ou logs
-  HTTP. A URL do servidor não contém credenciais.
+  capturado em memória e removido da barra antes da primeira requisição; ele
+  não vai para o Pages, referrer, histórico posterior ou logs HTTP. A URL do
+  servidor não contém credenciais.
 - Cookies externos usam `HttpOnly`, `Secure`, `SameSite=None` e `Partitioned`;
   mutações REST ainda exigem o token CSRF mantido apenas em memória.
 - Toda aprovação referencia o digest exato da revisão testada; qualquer edição
@@ -42,7 +45,21 @@
   apenas operações de domínio e comportamentos declarativos limitados.
 - O serviço escuta em loopback e é exposto somente pelo túnel autenticado; não
   se abrem portas no roteador.
+- O processo `cloudflared` recebe somente variáveis operacionais permitidas;
+  chaves, tokens, senhas e credenciais do ambiente não são herdados. URLs de
+  proxy só passam sem usuário, senha, caminho, busca ou fragmento.
+- O explorador usa allowlist, contenção por caminho real, bloqueio de links e
+  limites; `.env*`, bancos, chaves, Git, builds e dependências não são servidos.
+- SVG é tratado como texto UTF-8 inerte, nunca injetado como HTML nem renderizado
+  automaticamente pelo visualizador.
 - Logs devem redigir cabeçalhos de autenticação, cookies, tokens e chaves.
+
+O CORS protege uma **origem**, não um caminho. Enquanto o frontend usar
+`https://icaropv01.github.io/oficina-do-labirinto/`, todos os sites publicados
+sob a mesma origem `https://icaropv01.github.io` pertencem à mesma fronteira de
+confiança do navegador. Não se deve publicar conteúdo não confiável nessa conta.
+Antes da operação doméstica permanente, o Estúdio deve ganhar um domínio/origem
+dedicado junto com o túnel nomeado do gate R-205.
 
 ## Protótipo legado
 

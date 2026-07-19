@@ -3,6 +3,10 @@ import {
   parseGameProject,
   type GameProject,
 } from "../core";
+import type {
+  ProjectFileContent,
+  ProjectFileManifest,
+} from "@collaborative-roguelike/studio-contracts";
 import {
   StudioApiError,
   createStudioFetchTransport,
@@ -41,7 +45,10 @@ import {
   STUDIO_LAYOUT_STORAGE_KEY,
   STUDIO_PROJECT_STORAGE_KEY,
   STUDIO_SERVER_STORAGE_KEY,
+  bootstrapPublicPagesUrl,
+  bootstrapPublicStudioServerUrl,
   configuredStudioServerUrl,
+  createStudioInviteUrl,
   editorUrlFromStudio,
   inviteTokenFromUrl,
   readLayoutPreference,
@@ -71,6 +78,10 @@ export async function mountStudioApplication(
   root: HTMLElement,
 ): Promise<StudioApplicationHandle> {
   const pageUrl = new URL(window.location.href);
+  const capturedInviteToken = inviteTokenFromUrl(pageUrl);
+  // One-use credentials must leave the address bar before the first network
+  // request, retry screen or display-name form can retain them in history.
+  scrubInviteFragment(pageUrl);
   const storage = window.localStorage;
   let shell: StudioShellHandle | null = null;
   let realtime: ReturnType<typeof createStudioRealtime> | null = null;
@@ -101,23 +112,28 @@ export async function mountStudioApplication(
         createStudioFetchTransport({ baseUrl: normalized.toString() }),
       );
     } catch (error) {
-      renderServerConfiguration(root, serverUrl, errorMessage(error), connect, exitStudio);
+      renderStudioUnavailable(
+        root,
+        serverUrl,
+        errorMessage(error),
+        () => void connect(serverUrl),
+        connect,
+        exitStudio,
+      );
       return;
     }
 
     try {
       const session = await client.getSession();
-      scrubInviteFragment(pageUrl);
       await loadProjects(client, session);
     } catch (error) {
       if (error instanceof StudioApiError && error.status === 401) {
         renderInviteRedemption(
           root,
-          inviteTokenFromUrl(pageUrl),
+          capturedInviteToken,
           async (token, displayName, setError) => {
             try {
               const session = await client.redeemInvite(token, displayName);
-              scrubInviteFragment(pageUrl);
               await loadProjects(client, session);
             } catch (redeemError) {
               setError(errorMessage(redeemError));
@@ -127,7 +143,14 @@ export async function mountStudioApplication(
         );
         return;
       }
-      renderServerConfiguration(root, serverUrl, errorMessage(error), connect, exitStudio);
+      renderStudioUnavailable(
+        root,
+        serverUrl,
+        errorMessage(error),
+        () => void connect(serverUrl),
+        connect,
+        exitStudio,
+      );
     }
   };
 
@@ -182,7 +205,7 @@ export async function mountStudioApplication(
     safeStorageSet(storage, STUDIO_PROJECT_STORAGE_KEY, projectSummary.id);
     renderLoading(root, `Abrindo ${projectSummary.name}…`, exitStudio);
     try {
-      const [snapshot, chatMessages, modelResult, changeSetResult] = await Promise.all([
+      const [snapshot, chatMessages, modelResult, changeSetResult, projectFilesResult] = await Promise.all([
         client.getProjectSnapshot(projectSummary.id),
         client.listChat(projectSummary.id),
         client.listModels().then(
@@ -192,6 +215,10 @@ export async function mountStudioApplication(
         client.listChangeSets(projectSummary.id).then(
           (changeSets) => ({ changeSets, error: null as string | null }),
           (error: unknown) => ({ changeSets: [], error: errorMessage(error) }),
+        ),
+        client.listProjectFiles(projectSummary.id).then(
+          (manifest) => ({ manifest, error: null as string | null }),
+          (error: unknown) => ({ manifest: null, error: errorMessage(error) }),
         ),
       ]);
       const gameProject = parseGameProject(snapshot.revision.snapshot);
@@ -207,6 +234,8 @@ export async function mountStudioApplication(
         proposalError: changeSetResult.error,
         availableModelIds: modelResult.models.map(({ id }) => id),
         modelError: modelResult.error,
+        initialProjectFiles: projectFilesResult.manifest,
+        projectFilesError: projectFilesResult.error,
         storage,
         exitStudio,
       });
@@ -226,7 +255,14 @@ export async function mountStudioApplication(
   if (configuredUrl) {
     await connect(configuredUrl);
   } else {
-    renderServerConfiguration(root, "", "", connect, exitStudio);
+    renderStudioUnavailable(
+      root,
+      null,
+      "Este acesso não contém o endereço do Estúdio doméstico.",
+      () => window.location.reload(),
+      connect,
+      exitStudio,
+    );
   }
 
   const onPageHide = (): void => destroyRuntime();
@@ -253,6 +289,8 @@ interface ProjectRuntimeInput {
   readonly proposalError: string | null;
   readonly availableModelIds: readonly string[];
   readonly modelError: string | null;
+  readonly initialProjectFiles: ProjectFileManifest | null;
+  readonly projectFilesError: string | null;
   readonly storage: Storage;
   readonly exitStudio: () => void;
 }
@@ -274,6 +312,17 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
     readonly proposal: StudioAiProposalDto;
   } | null = null;
   let assistantProposalInFlight = false;
+  let inviteState: StudioShellModel["invite"]["state"] = "idle";
+  let inviteStatusMessage =
+    "Crie um link de uso único para seu amigo entrar sem configurar servidor ou IA.";
+  let inviteShareUrl: string | null = null;
+  let inviteExpiresAtLabel: string | null = null;
+  let selectedProjectFilePath: string | null = null;
+  let selectedProjectFile: ProjectFileContent | null = null;
+  let projectFileContentState: StudioShellModel["projectFiles"]["contentState"] = "idle";
+  let projectFileContentMessage = "Selecione um arquivo para visualizar seu conteúdo.";
+  let projectFileRequestSequence = 0;
+  const projectFileCache = new Map<string, ProjectFileContent>();
   let actionError: string | null = null;
   let previewError: string | null = null;
   let approvalInFlight = false;
@@ -393,6 +442,25 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
             value: inspectedProject.enemy.name,
           },
         ],
+      },
+      projectFiles: {
+        state: input.initialProjectFiles ? "ready" : "error",
+        statusMessage:
+          input.projectFilesError ??
+          (input.initialProjectFiles?.files.length
+            ? `${input.initialProjectFiles.files.length} arquivos disponíveis em modo somente leitura.`
+            : "Nenhum arquivo foi disponibilizado pelo servidor."),
+        files: input.initialProjectFiles?.files ?? [],
+        selectedPath: selectedProjectFilePath,
+        contentState: projectFileContentState,
+        contentMessage: projectFileContentMessage,
+        selectedContent: selectedProjectFile,
+      },
+      invite: {
+        state: inviteState,
+        statusMessage: inviteStatusMessage,
+        shareUrl: inviteShareUrl,
+        expiresAtLabel: inviteExpiresAtLabel,
       },
       chat: {
         channelId: input.projectSummary.id,
@@ -529,7 +597,11 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
       shell.sandboxPreviewHost.closest<HTMLElement>(".studio-shell")?.dataset[
         "layout"
       ] === "mobile";
-    sandboxPreview.setActive(!resolvedMobile || mobileView === "sandbox");
+    sandboxPreview.setActive(
+      resolvedMobile
+        ? mobileView === "sandbox"
+        : selectedProjectFilePath === null,
+    );
   };
 
   const refresh = (): void => {
@@ -560,6 +632,140 @@ function createProjectRuntime(input: ProjectRuntimeInput): {
     onLayoutPreferenceChange(preference) {
       layoutPreference = preference;
       safeStorageSet(input.storage, STUDIO_LAYOUT_STORAGE_KEY, preference);
+      refresh();
+    },
+    async onSelectProjectFile(path) {
+      const manifestEntry = input.initialProjectFiles?.files.find(
+        (entry) => entry.path === path,
+      );
+      if (!manifestEntry) {
+        return;
+      }
+      selectedProjectFilePath = path;
+      const cached = projectFileCache.get(path);
+      if (cached) {
+        selectedProjectFile = cached;
+        projectFileContentState = "ready";
+        projectFileContentMessage = "Arquivo carregado em modo somente leitura.";
+        refresh();
+        return;
+      }
+      selectedProjectFile = null;
+      projectFileContentState = "loading";
+      projectFileContentMessage = `Carregando ${manifestEntry.name}…`;
+      const requestSequence = ++projectFileRequestSequence;
+      refresh();
+      try {
+        const content = await input.client.getProjectFile(
+          input.projectSummary.id,
+          path,
+        );
+        if (requestSequence !== projectFileRequestSequence) {
+          return;
+        }
+        projectFileCache.set(path, content);
+        selectedProjectFile = content;
+        projectFileContentState = "ready";
+        projectFileContentMessage = "Arquivo carregado em modo somente leitura.";
+      } catch (error) {
+        if (requestSequence !== projectFileRequestSequence) {
+          return;
+        }
+        selectedProjectFile = null;
+        projectFileContentState = "error";
+        projectFileContentMessage = `Não foi possível abrir o arquivo: ${errorMessage(error)}`;
+      }
+      refresh();
+    },
+    onCloseProjectFile() {
+      projectFileRequestSequence += 1;
+      selectedProjectFilePath = null;
+      selectedProjectFile = null;
+      projectFileContentState = "idle";
+      projectFileContentMessage = "Selecione um arquivo para visualizar seu conteúdo.";
+      refresh();
+    },
+    async onCreateInvite() {
+      if (input.session.user.role !== "owner" || inviteState === "creating") {
+        return;
+      }
+      const ownerPageUrl = new URL(window.location.href);
+      let advertisedPublicServer: string | null;
+      let invitationPagesUrl: URL;
+      try {
+        advertisedPublicServer = bootstrapPublicStudioServerUrl(ownerPageUrl);
+        invitationPagesUrl = bootstrapPublicPagesUrl(ownerPageUrl) ?? ownerPageUrl;
+      } catch (error) {
+        inviteState = "error";
+        inviteStatusMessage = `O inicializador forneceu um endereço público inválido: ${errorMessage(error)}`;
+        refresh();
+        return;
+      }
+      const invitationServerUrl =
+        advertisedPublicServer ??
+        shareableStudioServerUrl(
+          ownerPageUrl,
+          input.client.transport.baseUrl,
+        );
+      if (!invitationServerUrl) {
+        inviteState = "error";
+        inviteStatusMessage =
+          "O endereço público do Estúdio não está neste acesso. Abra o link gerado pelo inicializador doméstico e tente novamente.";
+        refresh();
+        return;
+      }
+      inviteState = "creating";
+      inviteStatusMessage = "Criando um convite de uso único…";
+      inviteShareUrl = null;
+      inviteExpiresAtLabel = null;
+      refresh();
+      try {
+        const created = await input.client.createInvite("editor");
+        inviteShareUrl = createStudioInviteUrl(
+          invitationPagesUrl,
+          invitationServerUrl,
+          created.token,
+        );
+        inviteExpiresAtLabel = formatDate(created.invite.expiresAt);
+        inviteState = "ready";
+        inviteStatusMessage =
+          "Link pronto. Seu amigo usará a IA do servidor sem ver nem configurar a chave.";
+      } catch (error) {
+        inviteState = "error";
+        inviteStatusMessage = `Não foi possível criar o convite: ${errorMessage(error)}`;
+      }
+      refresh();
+    },
+    async onCopyInviteLink() {
+      if (!inviteShareUrl) return;
+      try {
+        await window.navigator.clipboard.writeText(inviteShareUrl);
+        inviteStatusMessage = "Link copiado. Ele funciona uma vez e expira no horário indicado.";
+      } catch {
+        inviteStatusMessage =
+          "O navegador bloqueou a cópia. Use Compartilhar ou permita acesso à área de transferência.";
+      }
+      refresh();
+    },
+    async onShareInviteLink() {
+      if (!inviteShareUrl) return;
+      try {
+        if (typeof window.navigator.share === "function") {
+          await window.navigator.share({
+            title: `Convite para ${input.projectSummary.name}`,
+            text: "Entre no nosso Estúdio compartilhado para construir e testar o jogo.",
+            url: inviteShareUrl,
+          });
+          inviteStatusMessage = "Convite compartilhado pelo dispositivo.";
+        } else {
+          await window.navigator.clipboard.writeText(inviteShareUrl);
+          inviteStatusMessage = "Compartilhamento indisponível; o link foi copiado.";
+        }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        inviteStatusMessage =
+          "Não foi possível compartilhar. Tente copiar o link novamente.";
+      }
       refresh();
     },
     async onRunSandboxTest(request) {
@@ -982,37 +1188,51 @@ function renderLoading(root: HTMLElement, message: string, onExit: () => void): 
   root.replaceChildren(card);
 }
 
-function renderServerConfiguration(
+function renderStudioUnavailable(
   root: HTMLElement,
-  currentUrl: string,
-  initialError: string,
+  currentUrl: string | null,
+  detail: string,
+  onRetry: () => void,
   onConnect: (url: string) => Promise<void>,
   onExit: () => void,
 ): void {
-  const card = gatewayCard(
+  const main = gatewayCard(
     root.ownerDocument,
-    "Conectar ao Estúdio",
-    "Informe o endereço HTTPS do servidor compartilhado. Nenhuma chave de IA é enviada ao navegador.",
+    "Estúdio doméstico desligado ou link expirado",
+    "Tente novamente quando o computador do dono estiver ligado. Se você é o convidado, abra exatamente o link enviado pelo dono.",
     onExit,
   );
+  const card = gatewayCardPanel(main);
+  const error = gatewayError(root.ownerDocument, detail);
+  const actions = root.ownerDocument.createElement("div");
+  actions.className = "studio-gateway__actions";
+  const retry = button(root.ownerDocument, "Tentar novamente");
+  retry.type = "button";
+  retry.addEventListener("click", onRetry);
+  actions.append(retry);
+
+  const advanced = root.ownerDocument.createElement("details");
+  advanced.className = "studio-gateway__advanced";
+  const summary = root.ownerDocument.createElement("summary");
+  summary.textContent = "Conexão avançada";
   const form = root.ownerDocument.createElement("form");
   form.className = "studio-gateway__form";
   const input = root.ownerDocument.createElement("input");
   input.type = "url";
   input.required = true;
-  input.value = currentUrl;
+  input.value = currentUrl ?? "";
   input.placeholder = "https://studio.exemplo.com";
   input.setAttribute("aria-label", "URL do servidor do Estúdio");
-  const error = gatewayError(root.ownerDocument, initialError);
   const submit = button(root.ownerDocument, "Conectar");
-  form.append(input, error, submit);
+  form.append(input, submit);
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     error.textContent = "";
     void onConnect(input.value);
   });
-  card.append(form);
-  root.replaceChildren(card);
+  advanced.append(summary, form);
+  card.append(error, actions, advanced);
+  root.replaceChildren(main);
 }
 
 function renderInviteRedemption(
@@ -1025,18 +1245,19 @@ function renderInviteRedemption(
   ) => Promise<void>,
   onExit: () => void,
 ): void {
-  const card = gatewayCard(
+  const main = gatewayCard(
     root.ownerDocument,
     "Entrar pelo convite",
     token
       ? "Escolha o nome que aparecerá para seu parceiro."
-      : "Este link não contém um convite válido. Peça ao dono um novo link com #invite=.",
+      : "Este link não contém um convite válido. Peça ao dono um novo link de uso único.",
     onExit,
   );
   if (!token) {
-    root.replaceChildren(card);
+    root.replaceChildren(main);
     return;
   }
+  const card = gatewayCardPanel(main);
   const form = root.ownerDocument.createElement("form");
   form.className = "studio-gateway__form";
   const name = root.ownerDocument.createElement("input");
@@ -1054,7 +1275,7 @@ function renderInviteRedemption(
     });
   });
   card.append(form);
-  root.replaceChildren(card);
+  root.replaceChildren(main);
 }
 
 function renderProjectSelection(
@@ -1065,12 +1286,13 @@ function renderProjectSelection(
   onCreate: ((name: string, setError: (message: string) => void) => Promise<void>) | null,
   onExit: () => void,
 ): void {
-  const card = gatewayCard(
+  const main = gatewayCard(
     root.ownerDocument,
     "Projetos do Estúdio",
     `${user.displayName}, escolha o projeto compartilhado.`,
     onExit,
   );
+  const card = gatewayCardPanel(main);
   const list = root.ownerDocument.createElement("div");
   list.className = "studio-project-list";
   for (const project of projects) {
@@ -1097,7 +1319,7 @@ function renderProjectSelection(
     });
     card.append(form);
   }
-  root.replaceChildren(card);
+  root.replaceChildren(main);
 }
 
 function renderFailure(root: HTMLElement, title: string, detail: string, onExit: () => void): void {
@@ -1121,6 +1343,14 @@ function gatewayCard(document: Document, title: string, detail: string, onExit: 
   return main;
 }
 
+function gatewayCardPanel(main: HTMLElement): HTMLElement {
+  const panel = main.firstElementChild;
+  if (!panel) {
+    throw new Error("O cartão do Estúdio não foi criado.");
+  }
+  return panel as HTMLElement;
+}
+
 function gatewayError(document: Document, message: string): HTMLElement {
   const error = document.createElement("p");
   error.className = "studio-gateway__error";
@@ -1139,4 +1369,29 @@ function button(document: Document, label: string): HTMLButtonElement {
 function errorMessage(error: unknown): string {
   if (error instanceof TypeError) return "Não foi possível alcançar o servidor. Verifique o endereço e a conexão.";
   return error instanceof Error ? error.message : "Ocorreu um erro inesperado no Estúdio.";
+}
+
+function shareableStudioServerUrl(
+  pageUrl: URL,
+  connectedServerUrl: URL,
+): string | null {
+  const candidates = [
+    pageUrl.searchParams.get("studioServer"),
+    connectedServerUrl.toString(),
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const normalized = normalizeStudioServerUrl(candidate);
+      const loopback = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
+        normalized.hostname.toLowerCase(),
+      );
+      if (normalized.protocol === "https:" && !loopback) {
+        return normalized.toString();
+      }
+    } catch {
+      // A malformed query cannot override the connected, validated endpoint.
+    }
+  }
+  return null;
 }

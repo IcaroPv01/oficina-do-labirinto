@@ -12,12 +12,21 @@ Pages quando este servidor estiver desligado.
 - guarda apenas o hash de tokens de sessão e convite no SQLite;
 - usa cookie de sessão opaco, `HttpOnly`, mais token CSRF;
 - mantém `VERBOO_API_KEY` exclusivamente no servidor;
+- expõe código e documentação somente por uma lista de caminhos segura, sem
+  aceitar `.env`, bancos, chaves, links simbólicos ou diretórios de build;
 - não possui rota para aplicar mudanças da IA, promover conteúdo ou escrever no
   GitHub;
 - limita bytes, mensagens e concorrência mesmo quando os tokens da IA não têm
   custo.
 
 ## Uso local
+
+Se `.env.local` já estiver pronto, o fluxo diário é iniciado na raiz por
+`INICIAR-ESTUDIO.cmd` ou `npm run studio:online`. O servidor, o túnel HTTPS, a
+verificação de saúde e o convite de proprietário são encadeados sem pedir a
+chave novamente. O botão **Convidar amigo** gera o link mobile dentro da UI.
+
+Para preparar uma instalação nova:
 
 1. Na raiz do projeto, rode `scripts/configure-studio.ps1` para gravar a chave
    de forma interativa; ou copie `.env.example` para `.env.local` e preencha a
@@ -41,12 +50,18 @@ Para desenvolvimento estritamente local por HTTP, use temporariamente
 `STUDIO_DEV_AUTH_ENABLED=true`. O servidor recusa essa combinação fora de um
 host loopback.
 
+O navegador de arquivos descobre automaticamente a raiz deste checkout. Em um
+layout diferente, `STUDIO_PROJECT_ROOT` pode apontar explicitamente para ela;
+esse caminho nunca é devolvido ao navegador.
+
 ## API inicial
 
 - `GET /health`
 - `POST /auth/invites/redeem`, `POST /auth/logout`, `GET /auth/me`
 - `POST /api/invites` (somente proprietário)
 - `GET|POST /api/projects`
+- `GET /api/projects/:id/files` e `GET /api/projects/:id/files/content?path=...`
+  para o manifesto e conteúdo somente leitura, ambos autenticados
 - `GET|PUT /api/projects/:id/snapshot` com revisão base otimista
 - `GET|POST /api/projects/:id/chat`
 - `GET|POST /api/projects/:id/change-sets`

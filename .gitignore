@@ -2,6 +2,7 @@
 .local-backups/
 .gemini/
 .antigravity/
+.local-tools/
 
 # Python legacy environment and generated output
 venv/

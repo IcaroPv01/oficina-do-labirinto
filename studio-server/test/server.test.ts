@@ -296,6 +296,65 @@ test("structured AI proposals reject unknown projects and read-only roles before
   }
 });
 
+test("authentication rate limiting isolates valid Cloudflare IPs without trusting invalid proxy headers", async () => {
+  const config = loadConfig({
+    STUDIO_HOST: "127.0.0.1",
+    STUDIO_PORT: "0",
+    STUDIO_DATABASE_PATH: ":memory:",
+    STUDIO_CORS_ORIGINS: origin,
+    STUDIO_COOKIE_SECURE: "false",
+    STUDIO_COOKIE_SAME_SITE: "lax",
+    STUDIO_DEV_AUTH_ENABLED: "false",
+  });
+  const studio = createStudioServer(config, { verboo: fakeVerboo });
+  const address = await studio.listen();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  const redeemInvalidInvite = async (
+    cloudflareAddress: string,
+    sequence: number,
+    forwardedFor?: string,
+  ): Promise<Response> =>
+    await fetch(`${baseUrl}/auth/invites/redeem`, {
+      method: "POST",
+      headers: {
+        origin,
+        "content-type": "application/json",
+        "cf-connecting-ip": cloudflareAddress,
+        ...(forwardedFor === undefined ? {} : { "x-forwarded-for": forwardedFor }),
+      },
+      body: JSON.stringify({ token: `invalid-invite-token-${sequence.toString().padStart(4, "0")}`, displayName: "Teste" }),
+    });
+
+  try {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const response = await redeemInvalidInvite("198.51.100.10", attempt);
+      assert.equal(response.status, 401);
+    }
+    assert.equal((await redeemInvalidInvite("198.51.100.10", 12)).status, 429);
+
+    // A second valid Cloudflare client address must have its own bucket.
+    assert.equal((await redeemInvalidInvite("2001:db8::20", 13)).status, 401);
+
+    // Invalid or combined CF headers fall back to the loopback socket bucket.
+    // Varying X-Forwarded-For must not create new buckets either.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const response = await redeemInvalidInvite(
+        `not-an-ip-${attempt}`,
+        100 + attempt,
+        `203.0.113.${attempt + 1}`,
+      );
+      assert.equal(response.status, 401);
+    }
+    assert.equal(
+      (await redeemInvalidInvite("198.51.100.1, 203.0.113.2", 112, "192.0.2.200")).status,
+      429,
+    );
+  } finally {
+    await studio.close();
+  }
+});
+
 function authHeaders(cookie: string, csrf: string): Record<string, string> {
   return { origin, cookie, "x-studio-csrf": csrf, "content-type": "application/json" };
 }

@@ -38,6 +38,20 @@ branch -> pull request -> CI -> aprovação -> main -> GitHub Pages
 GitHub Pages permanece estático e nunca recebe chaves, tokens, acesso ao banco
 ou permissão de escrita no repositório.
 
+### Entrada sem configuração diária
+
+`INICIAR-ESTUDIO.cmd` inicia o backend, verifica a identidade e versão de
+`/health`, abre um Quick Tunnel HTTPS e só então cria o convite do dono. O dono
+usa uma UI Vite local ligada à API loopback, portanto seu navegador não depende
+do DNS do túnel. A URL pública entra no link do Pages como dado não secreto; o
+token descartável fica somente no fragmento. Depois do login, o dono usa
+**Convidar amigo** e o celular recebe o mesmo fluxo com papel de coautor.
+
+O Quick Tunnel atende ao MVP de duas pessoas, mas é deliberadamente temporário
+e muda de endereço a cada execução. A instalação definitiva usa um túnel
+nomeado com hostname estável e serviço automático, conforme R-205. Nenhuma das
+duas formas encaminha uma porta do roteador.
+
 ## Papéis
 
 - **Dono:** configura o Estúdio, convida pessoas, vê auditoria e segredos,
@@ -112,6 +126,11 @@ edição estruturada, chat, IA, upload/câmera, teste, comentário e revisão. N
 celular em paisagem, o sandbox prioriza o jogo e exibe controles virtuais de
 movimento e disparo. Não existem ações dependentes apenas de hover.
 
+A visão do projeto é um manifesto autenticado e somente leitura. Ela permite
+buscar e abrir código, dados, documentação, imagens e configuração pública,
+mas não é uma API genérica de filesystem: allowlist, `realpath`, SHA-256,
+limites e bloqueio de links impedem sair da raiz ou alcançar segredos.
+
 ## Chat humano
 
 Existem canais gerais e uma conversa por proposta. Mensagens podem referenciar
@@ -185,7 +204,10 @@ limites rígidos. Ele não será executado diretamente no computador doméstico.
 - servidor escuta em `127.0.0.1` por padrão;
 - acesso externo somente por HTTPS através do túnel;
 - origem CORS limitada ao Pages e aos endereços locais de desenvolvimento;
-- sessões em cookies `HttpOnly`, `Secure` e `SameSite` adequados;
+- a origem do Pages é uma fronteira por hostname, não por caminho; até existir
+  domínio dedicado, outros projetos Pages da mesma conta precisam permanecer
+  confiáveis;
+- sessões em cookies `HttpOnly`, `Secure`, `SameSite=None` e `Partitioned`;
 - convites de uso único, expiráveis e revogáveis;
 - limites de payload, mensagens, uploads e conexões;
 - logs sem cookies, tokens, prompts sensíveis ou chave do provedor;

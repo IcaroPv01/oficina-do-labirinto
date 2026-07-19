@@ -7,7 +7,7 @@ evidência necessária para considerar cada gate concluído.
 Detalhes técnicos e decisões ficam em `docs/STUDIO_ARCHITECTURE.md`. Regras de
 trabalho ficam em `docs/COLLABORATION.md`; segurança, em `docs/SECURITY.md`.
 
-Última atualização: 13/07/2026, branch `codex/studio-foundation`.
+Última atualização: 18/07/2026, branch `codex/studio-foundation`.
 
 ## Regras que não podem regredir
 
@@ -30,7 +30,7 @@ trabalho ficam em `docs/COLLABORATION.md`; segurança, em `docs/SECURITY.md`.
 |---|---|---|
 | 0. Jogo web público | Concluído | Site publicado, `main` protegida e CI/Pages verdes |
 | 1. Fundação do Estúdio | Concluído | Contratos, servidor, segredo local, banco e builds verdes |
-| 2. Colaboração direta | Em validação | Convite, projeto compartilhado, chat/presença e reconexão utilizáveis em duas sessões |
+| 2. Colaboração direta | Em validação final | Convite mobile integrado, projeto compartilhado, chat/presença e reconexão utilizáveis em duas sessões reais |
 | 3. Proposta e sandbox | Concluído para dados estruturados | Candidata jogável e testada no desktop/mobile; assets aguardam R-203 |
 | 4. Promoção segura | Pendente | Aprovação cria branch/PR; CI publica; rollback ensaiado |
 | 5. IA aplicada | Parcial avançado | Chat, propostas auditáveis e comportamento prontos; sprites/PNG aguardam R-203 |
@@ -48,7 +48,7 @@ trabalho ficam em `docs/COLLABORATION.md`; segurança, em `docs/SECURITY.md`.
   - operações de domínio sem JSON Patch irrestrito;
   - DSL segura de comportamento de inimigos;
   - revisão, teste, aprovação, chat, atividade e proveniência;
-  - 72 testes aprovados, inclusive vínculos ator/revisão e bloqueio de
+  - 98 testes aprovados, inclusive vínculos ator/revisão, arquivos do projeto e bloqueio de
     credenciais em metadados.
 - [x] Fundação em `studio-server`:
   - HTTP/WebSocket e SQLite WAL;
@@ -56,12 +56,13 @@ trabalho ficam em `docs/COLLABORATION.md`; segurança, em `docs/SECURITY.md`.
   - snapshot otimista, explicação por revisão, chat, presença e auditoria;
   - gateway Verboo consultivo e limites técnicos;
   - proposta, teste, histórico imutável e aprovação por ID + SHA-256 exatos;
-  - 17 testes de integração aprovados e smoke HTTP compilado.
+  - 23 testes de integração aprovados e smoke HTTP compilado.
 - [x] Chave Verboo em `.env.local`, ignorada/não rastreada e com ACL restrita.
 - [x] API Verboo validada sem imprimir a chave:
-  - `deepseek-v4-flash` — padrão, contexto 1.048.576;
-  - `glm-4.7-flash` — contexto 200.704;
-  - `qwen3.6-27b` — contexto 262.144.
+  - smoke real de modelos e chat consultivo com `applied=false` em 18/07/2026;
+  - `pro/deepseek-v4-flash` — padrão, contexto 1.048.576;
+  - `pro/glm-4.7-flash` — contexto 200.704;
+  - `pro/qwen3.6-27b` — contexto 262.144.
 - [x] Estúdio ligado ao servidor: convite somente em `#invite`, sessão/CSRF,
   seleção/criação de projeto, chat, IA, propostas e presença com reconexão.
 - [x] Eventos WebSocket de chat, presença, revisão do projeto e propostas são
@@ -81,6 +82,20 @@ trabalho ficam em `docs/COLLABORATION.md`; segurança, em `docs/SECURITY.md`.
   - candidata marcada **NÃO APLICADA**, com operações e riscos;
   - autor, data, modelo, request ID e hash do prompt em atividade append-only;
   - aceite explícito cria somente um rascunho, sem testar, aprovar ou publicar.
+- [x] Projeto completo visível no Estúdio, em modo somente leitura:
+  - manifesto autenticado de 194 arquivos rastreados relevantes;
+  - busca e grupos para código, jogo, documentação, assets e configuração;
+  - viewer desktop/mobile com caminho, tamanho, SHA-256 e linhas;
+  - PNG/JPEG/WebP/GIF isolados; SVG sempre exibido como texto inerte;
+  - `.env`, chaves, bancos, `.git`, dependências, builds e links bloqueados.
+- [x] Acesso remoto sem configuração diária da API:
+  - `INICIAR-ESTUDIO.cmd` e `npm run studio:online` carregam o segredo local;
+  - conector Cloudflare oficial baixado com verificação SHA-256;
+  - processo do túnel recebe ambiente mínimo e nunca herda a chave Verboo;
+  - health, versão, CORS e chegada ao edge verificados antes do convite;
+  - UI do dono permanece local e independente do DNS público temporário;
+  - botão **Convidar amigo** cria convite de editor e usa Web Share no celular;
+  - token descartável fica apenas em `#invite` e sai da barra antes da rede.
 
 ## Em andamento agora
 
@@ -174,7 +189,9 @@ Portanto a primeira entrega usa:
 ### R-205 — Instalar no computador de casa
 
 - confirmar sistema operacional, CPU, RAM, espaço e estabilidade de rede;
-- instalar Node 24 e `cloudflared`;
+- [x] iniciador temporário instala e verifica `cloudflared` automaticamente;
+- instalar Node 24 e trocar o Quick Tunnel por túnel nomeado persistente;
+- dar ao Estúdio um domínio/origem dedicado, separado dos demais sites Pages;
 - serviço sem privilégios e inicialização automática;
 - hostname HTTPS persistente sem abrir portas no roteador;
 - backup diário de SQLite/assets e restauração testada;
@@ -195,13 +212,17 @@ Portanto a primeira entrega usa:
 
 ## Comandos de evidência
 
-Último gate local em 13/07/2026:
+Gate local em 18/07/2026:
 
-- web: 28 arquivos e 143 testes unitários;
-- contratos: 72 testes;
-- servidor: 17 testes;
-- navegador: 12 cenários E2E, incluindo candidata jogável, IA e mobile;
-- typecheck, conteúdo, builds e auditoria npm aprovados.
+- web: 28 arquivos e 158 testes unitários;
+- contratos: 98 testes;
+- servidor: 23 testes;
+- iniciador remoto: 18 testes;
+- navegador: 14 cenários E2E, incluindo convite público, arquivos, candidata
+  jogável, IA e mobile em retrato/paisagem;
+- smoke real da Verboo, Quick Tunnel HTTPS/CORS e navegador em 320×700
+  aprovados sem expor credenciais;
+- typecheck, conteúdo e builds aprovados.
 
 Antes de marcar um item técnico como concluído:
 

@@ -109,3 +109,84 @@ test("Verboo client keeps Bearer credentials server-side and forces advisory mod
     await new Promise<void>((resolve, reject) => upstream.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+test("Verboo rejects successful upstream payloads that echo its synthetic credential", async () => {
+  const syntheticKey = "synthetic-verboo-key-never-from-env";
+  const upstream = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk as Uint8Array));
+    const text = Buffer.concat(chunks).toString("utf8");
+    const body = text ? (JSON.parse(text) as { response_format?: unknown }) : null;
+    response.setHeader("content-type", "application/json");
+
+    if (request.url === "/router/v1/models") {
+      response.end(JSON.stringify({
+        data: [{ id: "model-one", owned_by: "verboo" }],
+        metadata: { [syntheticKey]: "even object names are untrusted provider strings" },
+      }));
+      return;
+    }
+    if (body?.response_format) {
+      response.end(JSON.stringify({
+        id: "proposal-safe-id",
+        model: "model-one",
+        choices: [{
+          message: {
+            role: "assistant",
+            content: JSON.stringify({
+              title: "Ajustar velocidade",
+              explanation: "Mudança pequena para o sandbox.",
+              risks: ["Pode alterar o ritmo do jogo."],
+              operations: [{
+                operationId: "operation-speed",
+                kind: "player.set-tuning",
+                explanation: "Aumenta a velocidade dentro do limite.",
+                tuning: { speed: 220 },
+              }],
+            }),
+          },
+        }],
+        debug: { nested: [`provider-prefix-${syntheticKey}-provider-suffix`] },
+      }));
+      return;
+    }
+    response.end(JSON.stringify({
+      id: "reply-safe-id",
+      model: "model-one",
+      choices: [{
+        message: { role: "assistant", content: `Sugestão insegura: ${syntheticKey}` },
+        finish_reason: "stop",
+      }],
+    }));
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const port = (upstream.address() as AddressInfo).port;
+  const config = loadConfig({
+    STUDIO_CORS_ORIGINS: "http://localhost:5173",
+    VERBOO_API_KEY: syntheticKey,
+    VERBOO_BASE_URL: `http://127.0.0.1:${port}/router/v1`,
+    VERBOO_DEFAULT_MODEL: "model-one",
+  });
+  const client = new VerbooClient(config);
+
+  try {
+    await assertSecretEchoRejected(client.listModels(), syntheticKey);
+    await assertSecretEchoRejected(
+      client.advisoryChat([{ role: "user", content: "Uma ideia" }]),
+      syntheticKey,
+    );
+    await assertSecretEchoRejected(client.proposeChange("Aumente um pouco a velocidade"), syntheticKey);
+  } finally {
+    await new Promise<void>((resolve, reject) => upstream.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+async function assertSecretEchoRejected(operation: Promise<unknown>, secret: string): Promise<void> {
+  await assert.rejects(operation, (error: unknown) => {
+    const rejected = error as { status?: number; code?: string; message?: string };
+    assert.equal(rejected.status, 502);
+    assert.equal(rejected.code, "ai_secret_echo");
+    assert.equal(rejected.message?.includes(secret), false);
+    return true;
+  });
+}

@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import defaultProject from "../../game-data/default-project.json" with { type: "json" };
 import {
+  createdStudioInvitation,
   installStudioBackendMock,
   studioInvitation,
   studioInvitationUrl,
@@ -59,6 +60,78 @@ test("resgata convite pelo fragmento e abre o Estúdio autenticado", async ({
 
   await page.getByRole("button", { name: "Encerrar sessão" }).click();
   await expect(page.getByTestId("app-ready")).toBeVisible();
+});
+
+test("owner local cria convite Pages usando somente o túnel público anunciado", async ({
+  page,
+}) => {
+  const localStudioServer = "http://127.0.0.1:8787";
+  const publicStudioServer = "https://public-studio.example/";
+  const publicPagesUrl =
+    "https://icaropv01.github.io/oficina-do-labirinto/";
+  const studioRequests: string[] = [];
+  page.on("request", (request) => {
+    const requestUrl = new URL(request.url());
+    if (
+      requestUrl.origin === new URL(localStudioServer).origin ||
+      requestUrl.origin === new URL(publicStudioServer).origin
+    ) {
+      studioRequests.push(request.url());
+    }
+  });
+  await page.addInitScript(() => {
+    const sharedWindow = window as typeof window & {
+      __studioSharedUrl?: string;
+    };
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: async (data: ShareData) => {
+        sharedWindow.__studioSharedUrl = String(data.url ?? "");
+      },
+    });
+  });
+  await installStudioBackendMock(page, {
+    initiallyAuthenticated: true,
+    serverOrigin: localStudioServer,
+  });
+  const bootstrap = new URLSearchParams({
+    studio: "1",
+    studioServer: localStudioServer,
+    publicStudioServer,
+    publicPagesUrl,
+  });
+
+  await page.goto(`./?${bootstrap.toString()}`);
+  await expect(page.locator("[data-studio-shell='ready']")).toBeVisible();
+  await page.getByRole("button", { name: "Convidar amigo" }).click();
+  await expect(page.getByText(/Link pronto/)).toBeVisible();
+  await page.getByRole("button", { name: "Compartilhar" }).click();
+
+  const sharedUrl = await page.evaluate(() =>
+    (window as typeof window & { __studioSharedUrl?: string })
+      .__studioSharedUrl,
+  );
+  expect(sharedUrl).toBeTruthy();
+  const invitation = new URL(sharedUrl!);
+  expect(invitation.origin).toBe("https://icaropv01.github.io");
+  expect(invitation.pathname).toBe("/oficina-do-labirinto/");
+  expect(invitation.searchParams.get("studio")).toBe("1");
+  expect(invitation.searchParams.get("studioServer")).toBe(
+    publicStudioServer,
+  );
+  expect(invitation.searchParams.get("publicStudioServer")).toBeNull();
+  expect(invitation.searchParams.get("publicPagesUrl")).toBeNull();
+  expect(invitation.searchParams.get("invite")).toBeNull();
+  expect(invitation.hash).toBe(`#invite=${createdStudioInvitation}`);
+  expect(sharedUrl!.slice(0, sharedUrl!.indexOf("#"))).not.toContain(
+    createdStudioInvitation,
+  );
+  expect(studioRequests.length).toBeGreaterThan(0);
+  expect(
+    studioRequests.every(
+      (requestUrl) => new URL(requestUrl).origin === new URL(localStudioServer).origin,
+    ),
+  ).toBe(true);
 });
 
 test("joga a candidata, registra o teste exato e só então aprova", async ({
