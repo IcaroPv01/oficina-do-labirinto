@@ -93,6 +93,8 @@ trabalho ficam em `docs/COLLABORATION.md`; segurança, em `docs/SECURITY.md`.
   - conector Cloudflare oficial baixado com verificação SHA-256;
   - processo do túnel recebe ambiente mínimo e nunca herda a chave Verboo;
   - health, versão, CORS e chegada ao edge verificados antes do convite;
+  - DNS local não é consultado antes do registro existir e dois resolvedores
+    públicos precisam confirmar o hostname antes de liberar o link;
   - UI do dono permanece local e independente do DNS público temporário;
   - botão **Convidar amigo** cria convite de editor e usa Web Share no celular;
   - token descartável fica apenas em `#invite` e sai da barra antes da rede.
@@ -217,7 +219,7 @@ Gate local em 18/07/2026:
 - web: 28 arquivos e 158 testes unitários;
 - contratos: 98 testes;
 - servidor: 23 testes;
-- iniciador remoto: 18 testes;
+- iniciador remoto: 20 testes;
 - navegador: 14 cenários E2E, incluindo convite público, arquivos, candidata
   jogável, IA e mobile em retrato/paisagem;
 - smoke real da Verboo, Quick Tunnel HTTPS/CORS e navegador em 320×700
