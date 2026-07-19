@@ -84,7 +84,7 @@ $lines = @(
     "STUDIO_INVITE_TTL_HOURS=24",
     "STUDIO_DEV_AUTH_ENABLED=false",
     "VERBOO_BASE_URL=https://code.verboo.ai/router/v1",
-    "VERBOO_DEFAULT_MODEL=deepseek-v4-flash",
+    "VERBOO_DEFAULT_MODEL=pro/deepseek-v4-flash",
     "VERBOO_API_KEY=$(ConvertTo-EnvValue -Value $apiKey)"
 )
 

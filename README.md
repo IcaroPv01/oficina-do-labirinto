@@ -37,6 +37,10 @@ consultiva com a Verboo, propostas, testes registrados e aprovação da revisão
 exata pelo dono. O jogo publicado continua estático no GitHub Pages e funciona
 mesmo quando o servidor doméstico está desligado.
 
+O Estúdio também possui um explorador autenticado e somente leitura do código,
+dados, documentação e configuração pública do projeto. Segredos, bancos,
+dependências, builds e links do sistema de arquivos nunca entram no manifesto.
+
 O `.gamepack` permanece como cópia de emergência. Edição estruturada no
 sandbox, promoção automática por branch/PR e assets gerados pela IA estão
 registrados como próximos gates no [ROADMAP.md](ROADMAP.md).
@@ -62,6 +66,36 @@ npm run test:e2e
 O build estático é produzido em `web/dist/`.
 
 ## Executar o Estúdio
+
+### Uso diário sem configurar a API
+
+Depois que `studio-server/.env.local` existe neste computador, não há campo de
+chave nem endereço para preencher. No Windows, dê dois cliques em
+`INICIAR-ESTUDIO.cmd`; pela linha de comando, o equivalente é:
+
+```powershell
+npm run studio:online
+```
+
+O iniciador:
+
+1. carrega a chave local diretamente no `studio-server`, sem entregá-la ao
+   navegador ou ao processo do túnel;
+2. baixa na primeira execução um `cloudflared` oficial e confere seu SHA-256;
+3. abre um túnel HTTPS temporário sem expor portas do roteador;
+4. confirma servidor, versão, CORS e IA antes de criar o convite;
+5. abre a UI local do proprietário e prepara nela o link público do GitHub
+   Pages para o amigo.
+
+Dentro da interface, **Convidar amigo** cria o link de coautor. No celular ele
+apenas abre o link, informa o nome e passa a usar chat, IA, arquivos do projeto
+e sandbox pela sua API privada. A chave continua somente no computador de casa.
+
+O endereço `trycloudflare.com` deste MVP é temporário: vale enquanto a janela do
+iniciador estiver aberta e muda a cada reinício. O túnel nomeado e iniciado como
+serviço, com hostname estável, continua no gate R-205 do roadmap.
+
+### Primeira instalação em outro computador
 
 Na primeira instalação do computador que hospedará o serviço:
 

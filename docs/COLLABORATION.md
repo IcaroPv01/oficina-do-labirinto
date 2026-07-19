@@ -46,14 +46,16 @@ processo.
 O Estúdio já fornece convite, sessão, projeto, chat, presença, IA consultiva e
 revisão segura de propostas. O fluxo-alvo, concluído por etapas, é:
 
-1. entre no Estúdio e crie uma proposta;
-2. descreva o objetivo e o motivo da mudança;
-3. edite o rascunho compartilhado ou adicione um resultado candidato da IA;
-4. marque a revisão como pronta para teste;
-5. teste exatamente essa revisão no sandbox e registre evidências;
-6. o dono solicita ajustes, rejeita ou aprova;
-7. a automação futura cria branch e pull request;
-8. CI, revisão e proteção da `main` controlam a publicação.
+1. o dono abre `INICIAR-ESTUDIO.cmd` e mantém essa janela ligada;
+2. em **Convidar amigo**, usa Compartilhar ou Copiar link;
+3. o coautor abre o link no computador ou celular e informa somente seu nome;
+4. ambos consultam o projeto completo no explorador e registram no chat o que
+   fizeram e por quê;
+5. criam uma proposta humana ou uma candidata estruturada da IA;
+6. marcam a revisão como pronta e testam exatamente essa versão no sandbox;
+7. o dono solicita ajustes, rejeita ou aprova;
+8. a automação futura cria branch e pull request;
+9. CI, revisão e proteção da `main` controlam a publicação.
 
 O jogo publicado nunca é substituído por autosave ou chat. Uma edição posterior
 invalida testes e aprovações anteriores. Consulte `STUDIO_ARCHITECTURE.md`.

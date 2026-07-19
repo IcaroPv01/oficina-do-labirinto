@@ -1,8 +1,12 @@
 import {
   ChangeOperationsSchema,
   ChangeSetSchema,
+  ProjectFileContentSchema,
+  ProjectFileManifestSchema,
   type ChangeOperation,
   type ChangeSet,
+  type ProjectFileContent,
+  type ProjectFileManifest,
   type RevisionDigestMetadata,
   type SandboxTestRecord,
   type WorkspaceRole,
@@ -45,6 +49,16 @@ export interface StudioRevisionDto {
 export interface StudioProjectSnapshotDto {
   readonly project: StudioProjectSummaryDto;
   readonly revision: StudioRevisionDto;
+}
+
+export interface StudioCreatedInviteDto {
+  readonly invite: {
+    readonly id: string;
+    readonly role: StudioBackendRole;
+    readonly expiresAt: string;
+    readonly createdAt: string;
+  };
+  readonly token: string;
 }
 
 export interface StudioChatMessageDto {
@@ -235,7 +249,10 @@ export interface StudioServerApiClient {
   readonly transport: StudioTransport;
   getHealth(signal?: AbortSignal): Promise<{
     readonly status: "ok";
+    readonly service: "oficina-studio-server";
+    readonly apiVersion: 1;
     readonly aiConfigured: boolean;
+    readonly now: string;
   }>;
   getSession(signal?: AbortSignal): Promise<StudioSessionDto>;
   redeemInvite(
@@ -243,6 +260,10 @@ export interface StudioServerApiClient {
     displayName: string,
     signal?: AbortSignal,
   ): Promise<StudioSessionDto>;
+  createInvite(
+    role: Extract<StudioBackendRole, "editor" | "viewer">,
+    signal?: AbortSignal,
+  ): Promise<StudioCreatedInviteDto>;
   logout(signal?: AbortSignal): Promise<void>;
   listProjects(signal?: AbortSignal): Promise<readonly StudioProjectSummaryDto[]>;
   createProject(
@@ -262,6 +283,15 @@ export interface StudioServerApiClient {
     explanation: string,
     signal?: AbortSignal,
   ): Promise<StudioProjectSnapshotDto>;
+  listProjectFiles(
+    projectId: string,
+    signal?: AbortSignal,
+  ): Promise<ProjectFileManifest>;
+  getProjectFile(
+    projectId: string,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<ProjectFileContent>;
   listChat(
     projectId: string,
     signal?: AbortSignal,
@@ -350,6 +380,12 @@ export function createStudioServerApiClient(
       transport.setCsrfToken(session.csrfToken);
       return session;
     },
+    async createInvite(role, signal) {
+      const response = await transport.send<unknown>(
+        request("POST", "/api/invites", { role }, signal, true),
+      );
+      return parseCreatedInviteResponse(response, role);
+    },
     async logout(signal) {
       await transport.send<void>(
         request("POST", "/auth/logout", {}, signal, true),
@@ -382,6 +418,51 @@ export function createStudioServerApiClient(
           signal,
         ),
       );
+    },
+    async listProjectFiles(projectId, signal) {
+      const response = await transport.send<unknown>(
+        request(
+          "GET",
+          `/api/projects/${segment(projectId)}/files`,
+          undefined,
+          signal,
+        ),
+      );
+      const parsed = ProjectFileManifestSchema.safeParse(response);
+      if (!parsed.success || parsed.data.projectId !== projectId) {
+        throw invalidProjectFilesResponse();
+      }
+      if (parsed.data.files.some(({ path }) => !isVisibleProjectFilePath(path))) {
+        throw invalidProjectFilesResponse();
+      }
+      return parsed.data;
+    },
+    async getProjectFile(projectId, path, signal) {
+      if (!isVisibleProjectFilePath(path)) {
+        throw new StudioApiError(
+          400,
+          "unsafe_project_file_path",
+          "Este caminho não pode ser aberto pelo navegador.",
+        );
+      }
+      const response = await transport.send<unknown>(
+        request(
+          "GET",
+          `/api/projects/${segment(projectId)}/files/content?path=${encodeURIComponent(path)}`,
+          undefined,
+          signal,
+        ),
+      );
+      const parsed = ProjectFileContentSchema.safeParse(response);
+      if (
+        !parsed.success ||
+        parsed.data.projectId !== projectId ||
+        parsed.data.entry.path !== path ||
+        !isVisibleProjectFilePath(parsed.data.entry.path)
+      ) {
+        throw invalidProjectFileContentResponse();
+      }
+      return parsed.data;
     },
     updateProjectSnapshot(
       projectId,
@@ -618,6 +699,33 @@ function segment(value: string): string {
   return encodeURIComponent(normalized);
 }
 
+/** Defense in depth: the server owns the allowlist, and the browser refuses
+ * secret-shaped or non-canonical paths even if a future server regresses. */
+export function isVisibleProjectFilePath(path: string): boolean {
+  if (
+    !path ||
+    path !== path.trim() ||
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    path.includes("\0")
+  ) {
+    return false;
+  }
+  const segments = path.split("/");
+  return segments.every((part) => {
+    const normalized = part.toLowerCase();
+    return (
+      part.length > 0 &&
+      part !== "." &&
+      part !== ".." &&
+      normalized !== ".git" &&
+      normalized !== "node_modules" &&
+      normalized !== ".env" &&
+      !normalized.startsWith(".env.")
+    );
+  });
+}
+
 function ensureTrailingSlash(url: URL): URL {
   const normalized = new URL(url);
   normalized.pathname = `${normalized.pathname.replace(/\/+$/, "")}/`;
@@ -634,6 +742,72 @@ function parseChangeSetResponse(value: unknown): StudioChangeSetDto {
     );
   }
   return parsed.data;
+}
+
+function invalidProjectFilesResponse(): StudioApiError {
+  return new StudioApiError(
+    502,
+    "invalid_project_files_response",
+    "O servidor retornou um manifesto de arquivos incompatível ou inseguro.",
+  );
+}
+
+function invalidProjectFileContentResponse(): StudioApiError {
+  return new StudioApiError(
+    502,
+    "invalid_project_file_content_response",
+    "O servidor retornou conteúdo que não corresponde ao arquivo solicitado.",
+  );
+}
+
+function parseCreatedInviteResponse(
+  value: unknown,
+  expectedRole: "editor" | "viewer",
+): StudioCreatedInviteDto {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw invalidInviteResponse();
+  }
+  const response = value as Record<string, unknown>;
+  if (
+    typeof response.token !== "string" ||
+    response.token.length < 16 ||
+    response.token.length > 512 ||
+    /\s/.test(response.token) ||
+    typeof response.invite !== "object" ||
+    response.invite === null ||
+    Array.isArray(response.invite)
+  ) {
+    throw invalidInviteResponse();
+  }
+  const invite = response.invite as Record<string, unknown>;
+  if (
+    typeof invite.id !== "string" ||
+    !isServerOpaqueId(invite.id) ||
+    invite.role !== expectedRole ||
+    typeof invite.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(invite.expiresAt)) ||
+    typeof invite.createdAt !== "string" ||
+    !Number.isFinite(Date.parse(invite.createdAt))
+  ) {
+    throw invalidInviteResponse();
+  }
+  return {
+    token: response.token,
+    invite: {
+      id: invite.id,
+      role: expectedRole,
+      expiresAt: invite.expiresAt,
+      createdAt: invite.createdAt,
+    },
+  };
+}
+
+function invalidInviteResponse(): StudioApiError {
+  return new StudioApiError(
+    502,
+    "invalid_invite_response",
+    "O servidor não confirmou a criação segura do convite.",
+  );
 }
 
 function validateSandboxTestInput(input: StudioSandboxTestInput): void {

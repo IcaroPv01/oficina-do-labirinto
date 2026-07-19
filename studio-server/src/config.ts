@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 export type CookieSameSite = "strict" | "lax" | "none";
 
@@ -6,6 +7,8 @@ export interface StudioConfig {
   readonly host: string;
   readonly port: number;
   readonly databasePath: string;
+  /** Absolute path of the checkout exposed by the read-only project browser. */
+  readonly projectRoot: string;
   readonly corsOrigins: ReadonlySet<string>;
   readonly cookieSecure: boolean;
   readonly cookieSameSite: CookieSameSite;
@@ -24,6 +27,17 @@ export interface StudioConfig {
   readonly verbooDefaultModel: string | undefined;
   readonly verbooTimeoutMs: number;
 }
+
+/**
+ * Exact development origins used by this checkout. They are safe to add without
+ * configuration because both hosts resolve only to the machine running the UI.
+ */
+const LOCAL_DEVELOPMENT_ORIGINS = [
+  "http://127.0.0.1:4173",
+  "http://localhost:4173",
+  "http://127.0.0.1:5173",
+  "http://localhost:5173",
+] as const;
 
 function envText(env: NodeJS.ProcessEnv, name: string, fallback?: string): string {
   const raw = env[name]?.trim();
@@ -91,7 +105,30 @@ function parseOrigins(value: string): ReadonlySet<string> {
   if (new Set(parsed).size !== parsed.length) {
     throw new Error("STUDIO_CORS_ORIGINS contém origens repetidas");
   }
-  return new Set(parsed);
+  return new Set([...parsed, ...LOCAL_DEVELOPMENT_ORIGINS]);
+}
+
+function looksLikeProjectRoot(path: string): boolean {
+  return (
+    existsSync(resolve(path, "package.json")) &&
+    existsSync(resolve(path, "web")) &&
+    existsSync(resolve(path, "studio-server")) &&
+    existsSync(resolve(path, "packages", "studio-contracts"))
+  );
+}
+
+/** Find the checkout from either its root or a workspace cwd, without relying on a fixed machine path. */
+function discoverProjectRoot(cwd: string): string {
+  let candidate = resolve(cwd);
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (looksLikeProjectRoot(candidate)) return candidate;
+    const parent = dirname(candidate);
+    if (parent === candidate) break;
+    candidate = parent;
+  }
+  // A non-existent or unrelated cwd remains useful in tests; the file service
+  // itself rejects an invalid root before serving a request.
+  return resolve(cwd);
 }
 
 function parseBaseUrl(value: string): string {
@@ -132,6 +169,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
 
   const databaseValue = envText(env, "STUDIO_DATABASE_PATH", "./data/studio.sqlite");
   const databasePath = databaseValue === ":memory:" ? databaseValue : resolve(cwd, databaseValue);
+  const configuredProjectRoot = env.STUDIO_PROJECT_ROOT?.trim();
+  const projectRoot = configuredProjectRoot ? resolve(cwd, configuredProjectRoot) : discoverProjectRoot(cwd);
   const sessionTtlHours = envInteger(env, "STUDIO_SESSION_TTL_HOURS", 168, 1, 24 * 90);
   const inviteTtlHours = envInteger(env, "STUDIO_INVITE_TTL_HOURS", 24, 1, 24 * 30);
 
@@ -139,6 +178,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
     host,
     port: envInteger(env, "STUDIO_PORT", 8787, 0, 65_535),
     databasePath,
+    projectRoot,
     corsOrigins: parseOrigins(envText(env, "STUDIO_CORS_ORIGINS")),
     cookieSecure,
     cookieSameSite,

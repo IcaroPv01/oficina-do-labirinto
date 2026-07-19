@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "npm --workspace web run dev",
     "studio:dev": "npm --workspace @collaborative-roguelike/studio-server run dev",
+    "studio:online": "node scripts/studio-online.mjs",
     "studio:start": "npm --workspace @collaborative-roguelike/studio-server run start",
     "studio:invite": "npm --workspace @collaborative-roguelike/studio-server run invite:create --",
     "build": "npm --workspace web run build",
@@ -20,11 +21,12 @@
     "test": "npm --workspace web run test",
     "test:run": "npm --workspace web run test:run",
     "test:studio": "npm --workspace @collaborative-roguelike/studio-contracts run test && npm --workspace @collaborative-roguelike/studio-server run test",
+    "test:online": "node --test scripts/studio-online.test.mjs",
     "test:e2e": "npm --workspace web run test:e2e",
     "typecheck": "npm run typecheck:web && npm run typecheck:studio",
     "typecheck:web": "npm --workspace web run typecheck",
     "typecheck:studio": "npm --workspace @collaborative-roguelike/studio-contracts run typecheck && npm --workspace @collaborative-roguelike/studio-server run typecheck",
-    "check": "npm run typecheck && npm run test:run && npm run test:studio && npm run content:validate && npm run build && npm run build:studio"
+    "check": "npm run typecheck && npm run test:run && npm run test:studio && npm run test:online && npm run content:validate && npm run build && npm run build:studio"
   },
   "engines": {
     "node": ">=24.0.0"

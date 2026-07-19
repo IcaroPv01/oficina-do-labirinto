@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createStudioFetchTransport,
   createStudioServerApiClient,
+  isVisibleProjectFilePath,
   normalizeStudioServerUrl,
   StudioApiError,
   type StudioTransport,
@@ -84,6 +85,125 @@ describe("createStudioFetchTransport", () => {
 });
 
 describe("createStudioServerApiClient", () => {
+  it("cria convite de coautor sem expor qualquer chave no navegador", async () => {
+    const requests: StudioTransportRequest[] = [];
+    const client = createStudioServerApiClient({
+      baseUrl: new URL("https://studio.example"),
+      setCsrfToken() {},
+      async send<Response>(request: StudioTransportRequest): Promise<Response> {
+        requests.push(request);
+        return {
+          invite: {
+            id: "invite-001",
+            role: "editor",
+            createdAt: "2026-07-18T12:00:00.000Z",
+            expiresAt: "2026-07-19T12:00:00.000Z",
+          },
+          token: "inv_one_use_token_123456",
+        } as Response;
+      },
+    });
+
+    const created = await client.createInvite("editor");
+
+    expect(created.invite.role).toBe("editor");
+    expect(requests).toEqual([
+      {
+        method: "POST",
+        path: "/api/invites",
+        body: { role: "editor" },
+        requiresCsrf: true,
+      },
+    ]);
+    expect(JSON.stringify(requests)).not.toMatch(/api[_-]?key|authorization|bearer/i);
+  });
+
+  it("carrega manifesto e conteúdo somente leitura pelas rotas do projeto", async () => {
+    const requests: StudioTransportRequest[] = [];
+    const source = "export const answer = 42;\n";
+    const entry = {
+      path: "web/src/main.ts",
+      name: "main.ts",
+      category: "source" as const,
+      kind: "text" as const,
+      mediaType: "text/typescript" as const,
+      sizeBytes: new TextEncoder().encode(source).byteLength,
+      sha256: "a".repeat(64),
+    };
+    const client = createStudioServerApiClient({
+      baseUrl: new URL("https://studio.example"),
+      setCsrfToken() {},
+      async send<Response>(request: StudioTransportRequest): Promise<Response> {
+        requests.push(request);
+        return (request.path.endsWith("/files")
+          ? {
+              schemaVersion: 1,
+              projectId: "project-main",
+              generatedAt: "2026-07-18T12:00:00.000Z",
+              manifestDigest: "b".repeat(64),
+              files: [entry],
+            }
+          : {
+              schemaVersion: 1,
+              projectId: "project-main",
+              entry,
+              encoding: "utf8",
+              content: source,
+            }) as Response;
+      },
+    });
+
+    const manifest = await client.listProjectFiles("project-main");
+    const file = await client.getProjectFile("project-main", entry.path);
+
+    expect(manifest.files[0]?.path).toBe(entry.path);
+    expect(file.content).toBe(source);
+    expect(requests).toEqual([
+      {
+        method: "GET",
+        path: "/api/projects/project-main/files",
+      },
+      {
+        method: "GET",
+        path: "/api/projects/project-main/files/content?path=web%2Fsrc%2Fmain.ts",
+      },
+    ]);
+  });
+
+  it("recusa .env antes da rede e não aceita conteúdo de outro caminho", async () => {
+    let calls = 0;
+    const client = createStudioServerApiClient({
+      baseUrl: new URL("https://studio.example"),
+      setCsrfToken() {},
+      async send<Response>(): Promise<Response> {
+        calls += 1;
+        return {
+          schemaVersion: 1,
+          projectId: "project-main",
+          entry: {
+            path: "README.md",
+            name: "README.md",
+            category: "documentation",
+            kind: "text",
+            mediaType: "text/markdown",
+            sizeBytes: 0,
+            sha256: "c".repeat(64),
+          },
+          encoding: "utf8",
+          content: "",
+        } as Response;
+      },
+    });
+
+    await expect(client.getProjectFile("project-main", ".env"))
+      .rejects.toMatchObject({ code: "unsafe_project_file_path" });
+    expect(calls).toBe(0);
+
+    await expect(client.getProjectFile("project-main", "docs/README.md"))
+      .rejects.toMatchObject({ code: "invalid_project_file_content_response" });
+    expect(calls).toBe(1);
+  });
+
   it("alinha snapshot, chat e IA às rotas reais do servidor", async () => {
     const requests: StudioTransportRequest[] = [];
     const transport = mockTransport(requests);
@@ -470,6 +590,16 @@ describe("createStudioServerApiClient", () => {
     await expect(client.listChangeSets("project-main")).rejects.toMatchObject({
       code: "invalid_change_set_response",
     });
+  });
+});
+
+describe("isVisibleProjectFilePath", () => {
+  it("aceita caminhos POSIX públicos e bloqueia segredos e travessia", () => {
+    expect(isVisibleProjectFilePath("web/src/main.ts")).toBe(true);
+    expect(isVisibleProjectFilePath(".env")).toBe(false);
+    expect(isVisibleProjectFilePath("web/.env.local")).toBe(false);
+    expect(isVisibleProjectFilePath("../studio-server/.env")).toBe(false);
+    expect(isVisibleProjectFilePath("web\\src\\main.ts")).toBe(false);
   });
 });
 

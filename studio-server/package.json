@@ -13,7 +13,7 @@
     "dev": "node --env-file-if-exists=.env.local --import tsx src/index.ts",
     "start": "node --env-file-if-exists=.env.local --import tsx dist/src/index.js",
     "invite:create": "node --env-file-if-exists=.env.local --import tsx src/cli/create-invite.ts",
-    "test": "tsx --test test/config.test.ts test/database.test.ts test/change-sets.test.ts test/change-set-api.test.ts test/verboo.test.ts test/server.test.ts",
+    "test": "tsx --test test/config.test.ts test/database.test.ts test/change-sets.test.ts test/change-set-api.test.ts test/verboo.test.ts test/server.test.ts test/project-files.test.ts test/auth-cookie.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

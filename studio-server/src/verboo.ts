@@ -228,14 +228,15 @@ export class VerbooClient {
   }
 
   private async request(path: string, init: RequestInit): Promise<unknown> {
-    if (!this.key) throw new HttpError(503, "ai_not_configured", "A integração com a IA ainda não foi configurada");
+    const key = this.key;
+    if (!key) throw new HttpError(503, "ai_not_configured", "A integração com a IA ainda não foi configurada");
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
         ...init,
         headers: {
           ...init.headers,
-          authorization: `Bearer ${this.key}`,
+          authorization: `Bearer ${key}`,
           accept: "application/json",
         },
         signal: AbortSignal.timeout(this.timeoutMs),
@@ -249,12 +250,39 @@ export class VerbooClient {
       throw new HttpError(502, "ai_upstream_error", `A IA respondeu com status ${response.status}`);
     }
     const bytes = await readLimitedResponse(response, this.responseLimit);
+    let payload: unknown;
     try {
-      return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+      payload = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
     } catch {
       throw new HttpError(502, "invalid_ai_response", "A IA retornou JSON inválido");
     }
+    if (payloadContainsExactSecret(payload, key)) {
+      throw new HttpError(502, "ai_secret_echo", "A IA retornou uma resposta insegura");
+    }
+    return payload;
   }
+}
+
+function payloadContainsExactSecret(payload: unknown, secret: string): boolean {
+  const pending: unknown[] = [payload];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === "string") {
+      if (value.includes(secret)) return true;
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const child of value) pending.push(child);
+      continue;
+    }
+    const record = asRecord(value);
+    if (!record) continue;
+    for (const [name, child] of Object.entries(record)) {
+      if (name.includes(secret)) return true;
+      pending.push(child);
+    }
+  }
+  return false;
 }
 
 function invalidProposalResponse(): HttpError {

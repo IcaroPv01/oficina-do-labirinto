@@ -4,3 +4,4 @@ export * from "./chat.js";
 export * from "./enemy-behavior.js";
 export * from "./operations.js";
 export * from "./primitives.js";
+export * from "./project-files.js";

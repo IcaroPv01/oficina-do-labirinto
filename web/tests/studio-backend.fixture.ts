@@ -4,6 +4,25 @@ import defaultProject from "../../game-data/default-project.json" with { type: "
 
 export const studioInvitation =
   "invite-token-with-at-least-twenty-characters";
+export const createdStudioInvitation =
+  "created-invite-token-with-at-least-twenty-characters";
+
+export const studioProjectFileSource = [
+  'import "./style.css";',
+  "",
+  'export const studioTitle = "Oficina do Labirinto";',
+  "",
+].join("\n");
+
+export const studioProjectFileEntry = {
+  path: "web/src/main.ts",
+  name: "main.ts",
+  category: "source" as const,
+  kind: "text" as const,
+  mediaType: "text/typescript" as const,
+  sizeBytes: new TextEncoder().encode(studioProjectFileSource).byteLength,
+  sha256: "e".repeat(64),
+};
 
 export const studioSession = {
   user: {
@@ -90,12 +109,21 @@ export const studioCandidateChangeSet = {
   supersededByChangeSetId: null,
 } satisfies ChangeSet;
 
+export interface StudioBackendMockOptions {
+  readonly initiallyAuthenticated?: boolean;
+  readonly serverOrigin?: string;
+}
+
 /** Installs the smallest browser-level backend needed to exercise the gateway. */
-export async function installStudioBackendMock(page: Page): Promise<void> {
-  let authenticated = false;
+export async function installStudioBackendMock(
+  page: Page,
+  options: StudioBackendMockOptions = {},
+): Promise<void> {
+  let authenticated = options.initiallyAuthenticated ?? false;
   let candidateChangeSet: ChangeSet = structuredClone(studioCandidateChangeSet);
   let aiDraftChangeSet: ChangeSet | null = null;
-  await page.route("https://studio.test/**", async (route) => {
+  const serverOrigin = options.serverOrigin ?? "https://studio.test";
+  await page.route(`${serverOrigin}/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const corsHeaders = {
@@ -110,22 +138,46 @@ export async function installStudioBackendMock(page: Page): Promise<void> {
       await route.fulfill({ status: 204, headers: corsHeaders });
       return;
     }
-    if (url.pathname === "/auth/me" && !authenticated) {
-      await route.fulfill({
-        status: 401,
-        headers: corsHeaders,
-        json: {
-          error: {
-            code: "authentication_required",
-            message: "Autenticação necessária",
+    if (url.pathname === "/auth/me") {
+      if (!authenticated) {
+        await route.fulfill({
+          status: 401,
+          headers: corsHeaders,
+          json: {
+            error: {
+              code: "authentication_required",
+              message: "Autenticação necessária",
+            },
           },
-        },
-      });
+        });
+      } else {
+        await route.fulfill({
+          status: 200,
+          headers: corsHeaders,
+          json: studioSession,
+        });
+      }
       return;
     }
     if (url.pathname === "/auth/invites/redeem") {
       authenticated = true;
       await route.fulfill({ status: 200, headers: corsHeaders, json: studioSession });
+      return;
+    }
+    if (url.pathname === "/api/invites" && request.method() === "POST") {
+      await route.fulfill({
+        status: 201,
+        headers: corsHeaders,
+        json: {
+          invite: {
+            id: "invite-created-browser-1",
+            role: "editor",
+            createdAt: "2026-07-18T12:00:00.000Z",
+            expiresAt: "2026-07-19T12:00:00.000Z",
+          },
+          token: createdStudioInvitation,
+        },
+      });
       return;
     }
     if (url.pathname === "/auth/logout" && request.method() === "POST") {
@@ -157,6 +209,43 @@ export async function installStudioBackendMock(page: Page): Promise<void> {
             createdBy: studioSession.user.id,
             createdAt: "2026-07-13T12:00:00.000Z",
           },
+        },
+      });
+      return;
+    }
+    if (url.pathname === `/api/projects/${studioProject.id}/files`) {
+      await route.fulfill({
+        status: 200,
+        headers: corsHeaders,
+        json: {
+          schemaVersion: 1,
+          projectId: studioProject.id,
+          generatedAt: "2026-07-18T12:00:00.000Z",
+          manifestDigest: "f".repeat(64),
+          files: [studioProjectFileEntry],
+        },
+      });
+      return;
+    }
+    if (url.pathname === `/api/projects/${studioProject.id}/files/content`) {
+      const requestedPath = url.searchParams.get("path");
+      if (requestedPath !== studioProjectFileEntry.path) {
+        await route.fulfill({
+          status: 404,
+          headers: corsHeaders,
+          json: { error: { code: "file_not_found", message: "Arquivo ausente" } },
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        headers: corsHeaders,
+        json: {
+          schemaVersion: 1,
+          projectId: studioProject.id,
+          entry: studioProjectFileEntry,
+          encoding: "utf8",
+          content: studioProjectFileSource,
         },
       });
       return;

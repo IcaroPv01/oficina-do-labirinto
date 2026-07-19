@@ -1,4 +1,8 @@
 import "./studio.css";
+import type {
+  ProjectFileCategory,
+  ProjectFileEntry,
+} from "@collaborative-roguelike/studio-contracts";
 import { formatContextWindow } from "./assistant-models";
 import type {
   StudioApprovalControlState,
@@ -60,6 +64,20 @@ const MOBILE_VIEWS = [
   label: string;
   icon: string;
 }[];
+
+const PROJECT_FILE_CATEGORIES = [
+  { id: "source", label: "Código" },
+  { id: "game-data", label: "Dados do jogo" },
+  { id: "asset", label: "Imagens e assets" },
+  { id: "documentation", label: "Documentação" },
+  { id: "configuration", label: "Configuração pública" },
+] as const satisfies readonly {
+  readonly id: ProjectFileCategory;
+  readonly label: string;
+}[];
+
+const MAX_RENDERED_FILE_LINES = 5_000;
+const MAX_RENDERED_TEXT_CHARACTERS = 500_000;
 
 const PROPOSAL_STATUS = {
   draft: { label: "Rascunho", tone: "neutral" },
@@ -228,6 +246,12 @@ export function createStudioShell(
   root.className = "studio-shell";
   root.dataset.studioShell = "ready";
   root.dataset.mobileView = initialModel.mobileView;
+  root.dataset.projectFilesPane = initialModel.projectFiles.selectedPath
+    ? "viewer"
+    : "tree";
+  root.dataset.projectFileSelected = String(
+    initialModel.projectFiles.selectedPath !== null,
+  );
   root.dataset.layoutPreference = initialModel.layoutPreference;
   root.dataset.layout = resolveStudioLayout(
     initialModel.layoutPreference,
@@ -241,6 +265,10 @@ export function createStudioShell(
   let model = initialModel;
   let destroyed = false;
   let assistantMode: StudioAssistantMode = "ask";
+  let projectFileSearch = "";
+  let projectFilesPane: "tree" | "viewer" = initialModel.projectFiles.selectedPath
+    ? "viewer"
+    : "tree";
   const drafts: StudioComposerDrafts = {
     chat: "",
     assistantAsk: "",
@@ -311,6 +339,22 @@ export function createStudioShell(
     options.onLayoutPreferenceChange?.(preference);
   };
 
+  const selectProjectFile = (path: string): void => {
+    projectFilesPane = "viewer";
+    void options.onSelectProjectFile?.(path);
+    render();
+  };
+
+  const showProjectFileTree = (): void => {
+    projectFilesPane = "tree";
+    render(`${idPrefix}-project-file-search`);
+  };
+
+  const closeProjectFile = (): void => {
+    projectFilesPane = "tree";
+    options.onCloseProjectFile?.();
+  };
+
   const refreshResolvedLayout = (): void => {
     root.dataset.layoutPreference = model.layoutPreference;
     root.dataset.layout = resolveStudioLayout(
@@ -329,6 +373,10 @@ export function createStudioShell(
       `Estúdio colaborativo do projeto ${model.projectName}`,
     );
     root.dataset.mobileView = model.mobileView;
+    root.dataset.projectFilesPane = projectFilesPane;
+    root.dataset.projectFileSelected = String(
+      model.projectFiles.selectedPath !== null,
+    );
     refreshResolvedLayout();
     root.replaceChildren(
       createHeader(
@@ -336,8 +384,7 @@ export function createStudioShell(
         idPrefix,
         model,
         selectLayoutPreference,
-        options.onExitStudio,
-        options.onLogout,
+        options,
       ),
       createOverview(document, idPrefix, model),
       createMainLayout(
@@ -352,6 +399,13 @@ export function createStudioShell(
         selectProposal,
         selectComparison,
         selectRightTab,
+        projectFileSearch,
+        (value) => {
+          projectFileSearch = value;
+        },
+        selectProjectFile,
+        showProjectFileTree,
+        closeProjectFile,
       ),
       createBottomPanel(
         document,
@@ -405,8 +459,7 @@ function createHeader(
   idPrefix: string,
   model: StudioShellModel,
   onLayoutPreferenceChange: (preference: StudioLayoutPreference) => void,
-  onExitStudio: (() => void) | undefined,
-  onLogout: (() => void | Promise<void>) | undefined,
+  options: StudioShellOptions,
 ): HTMLElement {
   const header = element(document, "header", "studio-header");
   const brand = element(document, "div", "studio-brand");
@@ -430,13 +483,13 @@ function createHeader(
   connection.setAttribute("role", "status");
   connection.setAttribute("aria-live", "polite");
   const actions = element(document, "div", "studio-header__actions");
-  if (onExitStudio) {
+  if (options.onExitStudio) {
     const exit = element(document, "button", "studio-exit-button", "Voltar ao editor");
     exit.type = "button";
-    exit.addEventListener("click", onExitStudio);
+    exit.addEventListener("click", options.onExitStudio);
     actions.append(exit);
   }
-  if (onLogout) {
+  if (options.onLogout) {
     const logout = element(
       document,
       "button",
@@ -444,7 +497,7 @@ function createHeader(
       "Encerrar sessão",
     );
     logout.type = "button";
-    logout.addEventListener("click", () => void onLogout());
+    logout.addEventListener("click", () => void options.onLogout?.());
     actions.append(logout);
   }
   actions.append(
@@ -548,10 +601,24 @@ function createMainLayout(
   onSelectProposal: (proposalId: string) => void,
   onComparisonChange: (target: StudioComparisonTarget) => void,
   onRightPanelChange: (tab: StudioRightPanelTab) => void,
+  projectFileSearch: string,
+  onProjectFileSearchChange: (value: string) => void,
+  onSelectProjectFile: (path: string) => void,
+  onShowProjectFileTree: () => void,
+  onCloseProjectFile: () => void,
 ): HTMLElement {
   const main = element(document, "main", "studio-main");
   main.append(
-    createSidebar(document, model, onSelectProposal),
+    createSidebar(
+      document,
+      idPrefix,
+      model,
+      options,
+      onSelectProposal,
+      projectFileSearch,
+      onProjectFileSearchChange,
+      onSelectProjectFile,
+    ),
     createWorkspace(
       document,
       idPrefix,
@@ -559,6 +626,8 @@ function createMainLayout(
       options,
       sandboxPreviewHost,
       onComparisonChange,
+      onShowProjectFileTree,
+      onCloseProjectFile,
     ),
     createRightPanel(
       document,
@@ -576,8 +645,13 @@ function createMainLayout(
 
 function createSidebar(
   document: Document,
+  idPrefix: string,
   model: StudioShellModel,
+  options: StudioShellOptions,
   onSelectProposal: (proposalId: string) => void,
+  projectFileSearch: string,
+  onProjectFileSearchChange: (value: string) => void,
+  onSelectProjectFile: (path: string) => void,
 ): HTMLElement {
   const sidebar = element(document, "aside", "studio-sidebar");
   sidebar.setAttribute("aria-label", "Pessoas e propostas do projeto");
@@ -586,6 +660,7 @@ function createSidebar(
   presenceSection.append(
     element(document, "h2", undefined, "No Estúdio"),
     createPresenceList(document, model),
+    createInvitePanel(document, model, options),
   );
 
   const proposalsSection = element(document, "section", "studio-panel-section");
@@ -599,8 +674,184 @@ function createSidebar(
     createProposalList(document, model, onSelectProposal),
   );
 
-  sidebar.append(presenceSection, proposalsSection);
+  sidebar.append(
+    presenceSection,
+    proposalsSection,
+    createProjectFilesSection(
+      document,
+      idPrefix,
+      model,
+      projectFileSearch,
+      onProjectFileSearchChange,
+      onSelectProjectFile,
+    ),
+  );
   return sidebar;
+}
+
+function createProjectFilesSection(
+  document: Document,
+  idPrefix: string,
+  model: StudioShellModel,
+  currentSearch: string,
+  onSearchChange: (value: string) => void,
+  onSelectFile: (path: string) => void,
+): HTMLElement {
+  const section = element(document, "section", "studio-panel-section studio-project-files");
+  const visibleFiles = model.projectFiles.files.filter(({ path }) =>
+    isProjectFileVisibleInShell(path),
+  );
+  const heading = element(document, "div", "studio-section-heading--row");
+  heading.append(
+    element(document, "h2", undefined, "Arquivos do projeto"),
+    element(document, "span", "studio-count", String(visibleFiles.length)),
+  );
+  section.append(heading);
+
+  const status = element(
+    document,
+    "p",
+    "studio-project-files__status",
+    model.projectFiles.statusMessage,
+  );
+  status.setAttribute(
+    "role",
+    model.projectFiles.state === "error" ? "alert" : "status",
+  );
+  section.append(status);
+
+  if (model.projectFiles.state === "loading") {
+    section.setAttribute("aria-busy", "true");
+    return section;
+  }
+  if (model.projectFiles.state === "error" || visibleFiles.length === 0) {
+    section.append(
+      element(
+        document,
+        "p",
+        "studio-empty",
+        model.projectFiles.state === "error"
+          ? "O restante do Estúdio continua disponível."
+          : "Nenhum arquivo público foi disponibilizado.",
+      ),
+    );
+    return section;
+  }
+
+  const searchLabel = element(
+    document,
+    "label",
+    "studio-sr-only",
+    "Buscar arquivos do projeto",
+  );
+  const search = document.createElement("input");
+  search.id = `${idPrefix}-project-file-search`;
+  search.className = "studio-project-files__search";
+  search.type = "search";
+  search.value = currentSearch;
+  search.placeholder = "Buscar por nome ou caminho…";
+  search.setAttribute("aria-label", "Buscar arquivos do projeto");
+  searchLabel.htmlFor = search.id;
+
+  const resultStatus = element(document, "p", "studio-project-files__result-status");
+  resultStatus.setAttribute("role", "status");
+  resultStatus.setAttribute("aria-live", "polite");
+  const groups = element(document, "div", "studio-project-files__groups");
+  const groupViews: {
+    readonly section: HTMLElement;
+    readonly entries: readonly {
+      readonly entry: ProjectFileEntry;
+      readonly button: HTMLButtonElement;
+    }[];
+  }[] = [];
+
+  for (const category of PROJECT_FILE_CATEGORIES) {
+    const categoryFiles = visibleFiles.filter(
+      (entry) => entry.category === category.id,
+    );
+    if (categoryFiles.length === 0) {
+      continue;
+    }
+    const group = element(document, "section", "studio-project-file-group");
+    const title = element(document, "h3", undefined, category.label);
+    const list = element(document, "div", "studio-project-file-list");
+    const entryViews = categoryFiles.map((entry) => {
+      const fileButton = element(
+        document,
+        "button",
+        "studio-project-file",
+      );
+      fileButton.type = "button";
+      fileButton.dataset.projectFilePath = entry.path;
+      fileButton.setAttribute(
+        "aria-pressed",
+        String(entry.path === model.projectFiles.selectedPath),
+      );
+      const parentPath = projectFileParentPath(entry.path);
+      fileButton.append(
+        element(document, "strong", undefined, entry.name),
+        element(
+          document,
+          "small",
+          undefined,
+          `${parentPath ? `${parentPath} · ` : ""}${formatFileSize(entry.sizeBytes)}`,
+        ),
+      );
+      fileButton.addEventListener("click", () => onSelectFile(entry.path));
+      list.append(fileButton);
+      return { entry, button: fileButton };
+    });
+    group.append(title, list);
+    groups.append(group);
+    groupViews.push({ section: group, entries: entryViews });
+  }
+
+  const noResults = element(
+    document,
+    "p",
+    "studio-empty studio-project-files__no-results",
+    "Nenhum arquivo corresponde à busca.",
+  );
+  const applySearch = (): void => {
+    const query = search.value;
+    onSearchChange(query);
+    let visibleCount = 0;
+    for (const group of groupViews) {
+      let visibleInGroup = 0;
+      for (const item of group.entries) {
+        const matches = projectFileMatchesSearch(item.entry, query);
+        item.button.hidden = !matches;
+        if (matches) {
+          visibleCount += 1;
+          visibleInGroup += 1;
+        }
+      }
+      group.section.hidden = visibleInGroup === 0;
+    }
+    noResults.hidden = visibleCount > 0;
+    resultStatus.textContent = `${visibleCount} ${plural(
+      visibleCount,
+      "arquivo encontrado",
+      "arquivos encontrados",
+    )}.`;
+  };
+  search.addEventListener("input", applySearch);
+  section.append(searchLabel, search, resultStatus, groups, noResults);
+  applySearch();
+  return section;
+}
+
+export function projectFileMatchesSearch(
+  entry: Pick<ProjectFileEntry, "name" | "path">,
+  query: string,
+): boolean {
+  const normalizedQuery = query.trim().toLocaleLowerCase("pt-BR");
+  if (!normalizedQuery) {
+    return true;
+  }
+  return `${entry.name}\n${entry.path}`
+    .toLocaleLowerCase("pt-BR")
+    .includes(normalizedQuery);
 }
 
 function createPresenceList(
@@ -633,6 +884,64 @@ function createPresenceList(
     list.append(item);
   }
   return list;
+}
+
+function createInvitePanel(
+  document: Document,
+  model: StudioShellModel,
+  options: StudioShellOptions,
+): HTMLElement {
+  const panel = element(document, "section", "studio-invite-panel");
+  panel.dataset.inviteState = model.invite.state;
+  if (model.role !== "owner") {
+    panel.hidden = true;
+    return panel;
+  }
+  const status = element(
+    document,
+    "p",
+    "studio-invite-panel__status",
+    model.invite.statusMessage,
+  );
+  status.setAttribute(
+    "role",
+    model.invite.state === "error" ? "alert" : "status",
+  );
+  panel.append(status);
+  if (model.invite.state !== "ready") {
+    const create = element(
+      document,
+      "button",
+      "studio-invite-panel__create",
+      model.invite.state === "creating" ? "Criando convite…" : "Convidar amigo",
+    );
+    create.type = "button";
+    create.disabled = model.invite.state === "creating";
+    create.addEventListener("click", () => void options.onCreateInvite?.());
+    panel.append(create);
+  }
+  if (model.invite.state === "ready" && model.invite.shareUrl) {
+    if (model.invite.expiresAtLabel) {
+      panel.append(
+        element(
+          document,
+          "small",
+          undefined,
+          `Convite válido até ${model.invite.expiresAtLabel}.`,
+        ),
+      );
+    }
+    const actions = element(document, "div", "studio-invite-panel__actions");
+    const copy = element(document, "button", undefined, "Copiar link");
+    copy.type = "button";
+    copy.addEventListener("click", () => void options.onCopyInviteLink?.());
+    const share = element(document, "button", undefined, "Compartilhar");
+    share.type = "button";
+    share.addEventListener("click", () => void options.onShareInviteLink?.());
+    actions.append(copy, share);
+    panel.append(actions);
+  }
+  return panel;
 }
 
 function createProposalList(
@@ -711,9 +1020,14 @@ function createWorkspace(
   options: StudioShellOptions,
   sandboxPreviewHost: HTMLElement,
   onComparisonChange: (target: StudioComparisonTarget) => void,
+  onShowProjectFileTree: () => void,
+  onCloseProjectFile: () => void,
 ): HTMLElement {
   const workspace = element(document, "section", "studio-workspace");
-  workspace.setAttribute("aria-labelledby", `${idPrefix}-workspace-title`);
+  workspace.setAttribute("aria-label", "Área de trabalho do Estúdio");
+  workspace.dataset.projectFileOpen = String(
+    model.projectFiles.selectedPath !== null,
+  );
   const selected = selectedProposal(model);
   const comparisonTarget = selected ? model.comparisonTarget : "current";
   const heading = element(document, "div", "studio-workspace__heading");
@@ -759,8 +1073,242 @@ function createWorkspace(
     options,
   );
   const approval = createApprovalArea(document, idPrefix, model, options);
-  workspace.append(heading, preview, testEvidence, approval);
+  const sandboxWorkspace = element(
+    document,
+    "div",
+    "studio-sandbox-workspace",
+  );
+  sandboxWorkspace.append(heading, preview, testEvidence, approval);
+  workspace.append(sandboxWorkspace);
+  if (model.projectFiles.selectedPath) {
+    workspace.append(
+      createProjectFileViewer(
+        document,
+        idPrefix,
+        model,
+        onShowProjectFileTree,
+        onCloseProjectFile,
+      ),
+    );
+  }
   return workspace;
+}
+
+function createProjectFileViewer(
+  document: Document,
+  idPrefix: string,
+  model: StudioShellModel,
+  onShowProjectFileTree: () => void,
+  onCloseProjectFile: () => void,
+): HTMLElement {
+  const selectedPath = model.projectFiles.selectedPath;
+  const manifestEntry = model.projectFiles.files.find(
+    ({ path }) => path === selectedPath,
+  );
+  const viewer = element(document, "section", "studio-project-file-viewer");
+  viewer.setAttribute("aria-labelledby", `${idPrefix}-project-file-title`);
+
+  const toolbar = element(document, "div", "studio-project-file-viewer__toolbar");
+  const backToTree = element(
+    document,
+    "button",
+    "studio-project-file-viewer__back",
+    "← Voltar aos arquivos",
+  );
+  backToTree.type = "button";
+  backToTree.addEventListener("click", onShowProjectFileTree);
+  const close = element(
+    document,
+    "button",
+    "studio-project-file-viewer__close",
+    "Voltar ao sandbox",
+  );
+  close.type = "button";
+  close.addEventListener("click", onCloseProjectFile);
+  toolbar.append(backToTree, close);
+
+  const heading = element(document, "div", "studio-project-file-viewer__heading");
+  const title = element(
+    document,
+    "h2",
+    undefined,
+    manifestEntry?.name ?? "Arquivo do projeto",
+  );
+  title.id = `${idPrefix}-project-file-title`;
+  heading.append(
+    title,
+    element(
+      document,
+      "p",
+      undefined,
+      "Somente leitura. Para mudar este arquivo, descreva a alteração e transforme-a em uma proposta testável.",
+    ),
+  );
+  viewer.append(toolbar, heading);
+
+  if (!manifestEntry || !selectedPath || !isProjectFileVisibleInShell(selectedPath)) {
+    const invalid = element(
+      document,
+      "p",
+      "studio-project-file-viewer__message",
+      "O arquivo selecionado não está mais disponível.",
+    );
+    invalid.setAttribute("role", "alert");
+    viewer.append(invalid);
+    return viewer;
+  }
+
+  const metadata = element(document, "dl", "studio-project-file-viewer__metadata");
+  appendProjectFileMetadata(document, metadata, "Caminho", manifestEntry.path);
+  appendProjectFileMetadata(
+    document,
+    metadata,
+    "Tamanho",
+    formatFileSize(manifestEntry.sizeBytes),
+  );
+  appendProjectFileMetadata(document, metadata, "Tipo", manifestEntry.mediaType);
+  appendProjectFileMetadata(document, metadata, "SHA-256", manifestEntry.sha256);
+  viewer.append(metadata);
+
+  if (model.projectFiles.contentState === "loading") {
+    const loading = element(
+      document,
+      "p",
+      "studio-project-file-viewer__message",
+      model.projectFiles.contentMessage,
+    );
+    loading.setAttribute("role", "status");
+    loading.setAttribute("aria-busy", "true");
+    viewer.append(loading);
+    return viewer;
+  }
+  if (model.projectFiles.contentState === "error") {
+    const error = element(
+      document,
+      "p",
+      "studio-project-file-viewer__message",
+      model.projectFiles.contentMessage,
+    );
+    error.setAttribute("role", "alert");
+    viewer.append(error);
+    return viewer;
+  }
+
+  const file = model.projectFiles.selectedContent;
+  if (
+    model.projectFiles.contentState !== "ready" ||
+    !file ||
+    file.entry.path !== selectedPath ||
+    file.entry.sha256 !== manifestEntry.sha256
+  ) {
+    viewer.append(
+      element(
+        document,
+        "p",
+        "studio-project-file-viewer__message",
+        model.projectFiles.contentMessage,
+      ),
+    );
+    return viewer;
+  }
+
+  if (file.entry.kind === "image") {
+    viewer.append(createProjectImagePreview(document, file));
+  } else {
+    viewer.append(createProjectTextPreview(document, file));
+  }
+  return viewer;
+}
+
+function createProjectImagePreview(
+  document: Document,
+  file: NonNullable<StudioShellModel["projectFiles"]["selectedContent"]>,
+): HTMLElement {
+  const preview = element(document, "figure", "studio-project-file-image");
+  if (
+    file.encoding !== "base64" ||
+    !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
+      file.entry.mediaType,
+    )
+  ) {
+    const error = element(
+      document,
+      "p",
+      "studio-project-file-viewer__message",
+      "Este formato de imagem não pode ser exibido com segurança.",
+    );
+    error.setAttribute("role", "alert");
+    preview.append(error);
+    return preview;
+  }
+  const image = document.createElement("img");
+  image.src = `data:${file.entry.mediaType};base64,${file.content}`;
+  image.alt = `Prévia de ${file.entry.name}`;
+  image.loading = "lazy";
+  image.decoding = "async";
+  preview.append(
+    image,
+    element(
+      document,
+      "figcaption",
+      undefined,
+      `${file.entry.name} · pixels preservados sem suavização`,
+    ),
+  );
+  return preview;
+}
+
+function createProjectTextPreview(
+  document: Document,
+  file: NonNullable<StudioShellModel["projectFiles"]["selectedContent"]>,
+): HTMLElement {
+  const wrapper = element(document, "div", "studio-project-file-text");
+  if (file.encoding !== "utf8") {
+    const error = element(
+      document,
+      "p",
+      "studio-project-file-viewer__message",
+      "O servidor não retornou este texto em UTF-8.",
+    );
+    error.setAttribute("role", "alert");
+    wrapper.append(error);
+    return wrapper;
+  }
+
+  const formatted = formatProjectFileText(file.entry.path, file.content);
+  const characterLimited = formatted.slice(0, MAX_RENDERED_TEXT_CHARACTERS);
+  const allLines = characterLimited.split(/\r?\n/);
+  const displayedLines = allLines.slice(0, MAX_RENDERED_FILE_LINES);
+  const truncated =
+    formatted.length > characterLimited.length ||
+    allLines.length > displayedLines.length;
+  const lines = element(document, "ol", "studio-project-file-lines");
+  lines.setAttribute("aria-label", `Conteúdo somente leitura de ${file.entry.path}`);
+  const markdown = /\.(?:md|mdx)$/i.test(file.entry.path);
+  if (markdown) {
+    lines.dataset.format = "markdown";
+  }
+  for (const [index, sourceLine] of displayedLines.entries()) {
+    const line = element(document, "li", "studio-project-file-line");
+    line.dataset.line = String(index + 1);
+    if (markdown) {
+      line.dataset.markdownKind = markdownLineKind(sourceLine);
+    }
+    line.append(element(document, "code", undefined, sourceLine || " "));
+    lines.append(line);
+  }
+  wrapper.append(lines);
+  if (truncated) {
+    wrapper.prepend(
+      element(
+        document,
+        "p",
+        "studio-project-file-viewer__notice",
+        "A prévia foi limitada para manter o Estúdio rápido neste dispositivo; o arquivo original não foi alterado.",
+      ),
+    );
+  }
+  return wrapper;
 }
 
 function createComparisonSelector(
@@ -1845,6 +2393,79 @@ function presenceLabel(presence: "online" | "idle" | "offline"): string {
 
 function plural(count: number, singular: string, pluralForm: string): string {
   return count === 1 ? singular : pluralForm;
+}
+
+function appendProjectFileMetadata(
+  document: Document,
+  list: HTMLDListElement,
+  label: string,
+  value: string,
+): void {
+  const item = element(document, "div");
+  item.append(
+    element(document, "dt", undefined, label),
+    element(document, "dd", undefined, value),
+  );
+  list.append(item);
+}
+
+function projectFileParentPath(path: string): string {
+  const separator = path.lastIndexOf("/");
+  return separator < 0 ? "" : path.slice(0, separator);
+}
+
+function formatFileSize(sizeBytes: number): string {
+  if (sizeBytes < 1_024) {
+    return `${sizeBytes} B`;
+  }
+  if (sizeBytes < 1_048_576) {
+    return `${(sizeBytes / 1_024).toFixed(sizeBytes < 10_240 ? 1 : 0)} KB`;
+  }
+  return `${(sizeBytes / 1_048_576).toFixed(1)} MB`;
+}
+
+function formatProjectFileText(path: string, content: string): string {
+  if (!/\.json$/i.test(path)) {
+    return content;
+  }
+  try {
+    return JSON.stringify(JSON.parse(content), null, 2);
+  } catch {
+    return content;
+  }
+}
+
+function markdownLineKind(line: string): string {
+  const trimmed = line.trimStart();
+  if (/^#{1,6}\s/.test(trimmed)) return "heading";
+  if (/^(?:[-*+] |\d+\. )/.test(trimmed)) return "list";
+  if (/^```/.test(trimmed)) return "fence";
+  if (/^>\s?/.test(trimmed)) return "quote";
+  return "text";
+}
+
+function isProjectFileVisibleInShell(path: string): boolean {
+  if (
+    !path ||
+    path !== path.trim() ||
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    path.includes("\0")
+  ) {
+    return false;
+  }
+  return path.split("/").every((part) => {
+    const normalized = part.toLowerCase();
+    return (
+      part.length > 0 &&
+      part !== "." &&
+      part !== ".." &&
+      normalized !== ".git" &&
+      normalized !== "node_modules" &&
+      normalized !== ".env" &&
+      !normalized.startsWith(".env.")
+    );
+  });
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(

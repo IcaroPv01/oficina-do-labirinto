@@ -1,3 +1,8 @@
+import type {
+  ProjectFileContent,
+  ProjectFileEntry,
+} from "@collaborative-roguelike/studio-contracts";
+
 export type StudioRole = "owner" | "coauthor" | "tester";
 
 export type StudioConnectionState =
@@ -102,6 +107,38 @@ export interface StudioInspectorModel {
   readonly fields: readonly StudioInspectorField[];
 }
 
+export type StudioProjectFilesState = "loading" | "ready" | "error";
+
+export type StudioProjectFileContentState =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "error";
+
+/**
+ * Read-only view of the repository snapshot exposed by the Studio server.
+ * The browser never discovers files on its own and never receives secrets.
+ */
+export interface StudioProjectFilesModel {
+  readonly state: StudioProjectFilesState;
+  readonly statusMessage: string;
+  readonly files: readonly ProjectFileEntry[];
+  readonly selectedPath: string | null;
+  readonly contentState: StudioProjectFileContentState;
+  readonly contentMessage: string;
+  readonly selectedContent: ProjectFileContent | null;
+}
+
+export type StudioInviteState = "idle" | "creating" | "ready" | "error";
+
+/** The one-use token exists only inside shareUrl and always stays in its URL fragment. */
+export interface StudioInviteModel {
+  readonly state: StudioInviteState;
+  readonly statusMessage: string;
+  readonly shareUrl: string | null;
+  readonly expiresAtLabel: string | null;
+}
+
 export interface StudioChatMessage {
   readonly id: string;
   readonly authorName: string;
@@ -196,6 +233,8 @@ export interface StudioShellModel {
   readonly mobileView: StudioMobileView;
   readonly layoutPreference: StudioLayoutPreference;
   readonly inspector: StudioInspectorModel;
+  readonly projectFiles: StudioProjectFilesModel;
+  readonly invite: StudioInviteModel;
   readonly chat: StudioChatModel;
   readonly assistant: StudioAssistantModel;
   readonly changes: readonly StudioPanelItem[];
@@ -227,6 +266,11 @@ export interface StudioShellOptions {
   readonly onLayoutPreferenceChange?: (
     preference: StudioLayoutPreference,
   ) => void;
+  readonly onSelectProjectFile?: (path: string) => void | Promise<void>;
+  readonly onCloseProjectFile?: () => void;
+  readonly onCreateInvite?: () => void | Promise<void>;
+  readonly onCopyInviteLink?: () => void | Promise<void>;
+  readonly onShareInviteLink?: () => void | Promise<void>;
   readonly onRunSandboxTest?: (
     request: StudioRunSandboxTestRequest,
   ) => void | Promise<void>;

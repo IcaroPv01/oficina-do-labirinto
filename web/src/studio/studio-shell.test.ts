@@ -3,6 +3,7 @@ import type { StudioShellModel } from "./model";
 import {
   createStudioShell,
   deriveApprovalControl,
+  projectFileMatchesSearch,
   resolveStudioLayout,
   tabIndexFromKeyboard,
 } from "./studio-shell";
@@ -100,6 +101,15 @@ describe("resolveStudioLayout", () => {
   });
 });
 
+describe("projectFileMatchesSearch", () => {
+  it("busca sem diferenciar caixa no nome e no caminho", () => {
+    const entry = { name: "README.md", path: "docs/README.md" };
+    expect(projectFileMatchesSearch(entry, "readme")).toBe(true);
+    expect(projectFileMatchesSearch(entry, "DOCS/")).toBe(true);
+    expect(projectFileMatchesSearch(entry, "sprite")).toBe(false);
+  });
+});
+
 describe("createStudioShell", () => {
   it("monta regiões, seletores e abas acessíveis sem HTML injetado", () => {
     const document = new FakeDocument();
@@ -170,6 +180,293 @@ describe("createStudioShell", () => {
     expect(logout).toBeDefined();
     logout?.dispatch("click");
     expect(onLogout).toHaveBeenCalledOnce();
+  });
+
+  it("oferece ao dono convite copiável/compartilhável sem renderizar o token", () => {
+    const document = new FakeDocument();
+    const container = document.createElement("div");
+    const onCreateInvite = vi.fn();
+    const onCopyInviteLink = vi.fn();
+    const onShareInviteLink = vi.fn();
+    const shareUrl =
+      "https://owner.github.io/game/?studio=1&studioServer=https%3A%2F%2Fstudio.example%2F#invite=inv_secret_once";
+    const handle = createStudioShell(
+      container as unknown as HTMLElement,
+      createModel(),
+      { onCreateInvite, onCopyInviteLink, onShareInviteLink },
+    );
+    findOne(container, (node) => node.textContent === "Convidar amigo")
+      ?.dispatch("click");
+    handle.update(
+      createModel({
+        invite: {
+          state: "ready",
+          statusMessage: "Link pronto para seu amigo.",
+          shareUrl,
+          expiresAtLabel: "19/07/2026 12:00",
+        },
+      }),
+    );
+    findOne(container, (node) => node.textContent === "Copiar link")
+      ?.dispatch("click");
+    findOne(container, (node) => node.textContent === "Compartilhar")
+      ?.dispatch("click");
+    expect(onCreateInvite).toHaveBeenCalledOnce();
+    expect(onCopyInviteLink).toHaveBeenCalledOnce();
+    expect(onShareInviteLink).toHaveBeenCalledOnce();
+    expect(findOne(container, (node) => node.textContent.includes("inv_secret_once")))
+      .toBeUndefined();
+  });
+
+  it("não mostra criação de convite a coautores", () => {
+    const document = new FakeDocument();
+    const container = document.createElement("div");
+    createStudioShell(
+      container as unknown as HTMLElement,
+      createModel({ role: "coauthor" }),
+      { onCreateInvite: vi.fn() },
+    );
+    expect(findOne(container, (node) => node.textContent === "Convidar amigo"))
+      .toBeUndefined();
+  });
+
+  it("mostra arquivos reais em grupos, busca localmente e nunca lista .env", () => {
+    const document = new FakeDocument();
+    const container = document.createElement("div");
+    const onSelectProjectFile = vi.fn();
+    const base = createModel();
+    createStudioShell(
+      container as unknown as HTMLElement,
+      createModel({
+        projectFiles: {
+          ...base.projectFiles,
+          files: [
+            ...base.projectFiles.files,
+            {
+              path: ".env",
+              name: ".env",
+              category: "configuration",
+              kind: "text",
+              mediaType: "text/plain",
+              sizeBytes: 12,
+              sha256: "f".repeat(64),
+            },
+          ],
+        },
+      }),
+      { onSelectProjectFile },
+    );
+
+    expect(findOne(container, (node) => node.textContent === "Arquivos do projeto"))
+      .toBeDefined();
+    expect(findOne(container, (node) => node.dataset.projectFilePath === ".env"))
+      .toBeUndefined();
+    const source = findOne(
+      container,
+      (node) => node.dataset.projectFilePath === "web/src/main.ts",
+    );
+    expect(source).toBeDefined();
+
+    const search = findOne(
+      container,
+      (node) => node.getAttribute("aria-label") === "Buscar arquivos do projeto",
+    );
+    if (search) {
+      search.value = "readme";
+      search.dispatch("input");
+    }
+    expect(source?.hidden).toBe(true);
+    const readme = findOne(
+      container,
+      (node) => node.dataset.projectFilePath === "docs/README.md",
+    );
+    expect(readme?.hidden).toBe(false);
+    readme?.dispatch("click");
+    expect(onSelectProjectFile).toHaveBeenCalledWith("docs/README.md");
+  });
+
+  it("renderiza texto real escapado com linhas e metadados somente leitura", () => {
+    const document = new FakeDocument();
+    const container = document.createElement("div");
+    const source = "const answer = 42;\nexport { answer };\n";
+    const entry = {
+      path: "web/src/main.ts",
+      name: "main.ts",
+      category: "source" as const,
+      kind: "text" as const,
+      mediaType: "text/typescript" as const,
+      sizeBytes: new TextEncoder().encode(source).byteLength,
+      sha256: "a".repeat(64),
+    };
+    createStudioShell(
+      container as unknown as HTMLElement,
+      createModel({
+        projectFiles: {
+          state: "ready",
+          statusMessage: "Arquivo disponível.",
+          files: [entry],
+          selectedPath: entry.path,
+          contentState: "ready",
+          contentMessage: "Arquivo carregado em modo somente leitura.",
+          selectedContent: {
+            schemaVersion: 1,
+            projectId: "oficina",
+            entry,
+            encoding: "utf8",
+            content: source,
+          },
+        },
+      }),
+    );
+
+    expect(findOne(container, (node) => node.textContent === "const answer = 42;"))
+      .toBeDefined();
+    expect(findAll(container, (node) => node.className === "studio-project-file-line"))
+      .toHaveLength(3);
+    expect(findOne(container, (node) => node.textContent === "a".repeat(64)))
+      .toBeDefined();
+    expect(
+      findOne(
+        container,
+        (node) => node.textContent.startsWith("Somente leitura."),
+      ),
+    ).toBeDefined();
+  });
+
+  it("usa data URL apenas para bitmap e mantém SVG como texto inerte", () => {
+    const bitmapDocument = new FakeDocument();
+    const bitmapContainer = bitmapDocument.createElement("div");
+    const bitmapEntry = {
+      path: "game/assets/player.png",
+      name: "player.png",
+      category: "asset" as const,
+      kind: "image" as const,
+      mediaType: "image/png" as const,
+      sizeBytes: 1,
+      sha256: "c".repeat(64),
+    };
+    createStudioShell(
+      bitmapContainer as unknown as HTMLElement,
+      createModel({
+        projectFiles: {
+          state: "ready",
+          statusMessage: "Imagem disponível.",
+          files: [bitmapEntry],
+          selectedPath: bitmapEntry.path,
+          contentState: "ready",
+          contentMessage: "Imagem carregada.",
+          selectedContent: {
+            schemaVersion: 1,
+            projectId: "oficina",
+            entry: bitmapEntry,
+            encoding: "base64",
+            content: "AA==",
+          },
+        },
+      }),
+    );
+    const image = findOne(bitmapContainer, (node) => node.tagName === "IMG") as
+      | (FakeElement & { src?: string })
+      | undefined;
+    expect(image?.src).toBe("data:image/png;base64,AA==");
+
+    const svgDocument = new FakeDocument();
+    const svgContainer = svgDocument.createElement("div");
+    const svgSource = "<svg><script>alert('não executar')</script></svg>";
+    const svgEntry = {
+      path: "game/assets/icon.svg",
+      name: "icon.svg",
+      category: "asset" as const,
+      kind: "text" as const,
+      mediaType: "image/svg+xml" as const,
+      sizeBytes: new TextEncoder().encode(svgSource).byteLength,
+      sha256: "d".repeat(64),
+    };
+    createStudioShell(
+      svgContainer as unknown as HTMLElement,
+      createModel({
+        projectFiles: {
+          state: "ready",
+          statusMessage: "SVG disponível.",
+          files: [svgEntry],
+          selectedPath: svgEntry.path,
+          contentState: "ready",
+          contentMessage: "SVG carregado como texto.",
+          selectedContent: {
+            schemaVersion: 1,
+            projectId: "oficina",
+            entry: svgEntry,
+            encoding: "utf8",
+            content: svgSource,
+          },
+        },
+      }),
+    );
+    expect(findOne(svgContainer, (node) => node.textContent === svgSource))
+      .toBeDefined();
+    expect(findOne(svgContainer, (node) => node.tagName === "SCRIPT"))
+      .toBeUndefined();
+    expect(findOne(svgContainer, (node) => node.tagName === "IMG"))
+      .toBeUndefined();
+  });
+
+  it("volta do arquivo para a árvore no celular sem perder seleção, rascunho ou sandbox", () => {
+    const document = new FakeDocument();
+    const container = document.createElement("div");
+    const base = createModel();
+    const entry = base.projectFiles.files[0]!;
+    if (entry.kind !== "text") {
+      throw new Error("O fixture deveria começar por um arquivo de texto.");
+    }
+    const source = "export {};\n";
+    const model = createModel({
+      layoutPreference: "mobile",
+      mobileView: "project",
+      rightPanelTab: "chat",
+      projectFiles: {
+        ...base.projectFiles,
+        selectedPath: entry.path,
+        contentState: "ready",
+        contentMessage: "Arquivo carregado.",
+        selectedContent: {
+          schemaVersion: 1,
+          projectId: "oficina",
+          entry: {
+            ...entry,
+            sizeBytes: new TextEncoder().encode(source).byteLength,
+          },
+          encoding: "utf8",
+          content: source,
+        },
+      },
+    });
+    const handle = createStudioShell(
+      container as unknown as HTMLElement,
+      model,
+    );
+    const host = handle.sandboxPreviewHost;
+    const chatInput = findOne(
+      container,
+      (node) => node.placeholder.startsWith("Escreva uma mensagem"),
+    );
+    if (chatInput) {
+      chatInput.value = "Rascunho preservado";
+      chatInput.dispatch("input");
+    }
+
+    findOne(container, (node) => node.textContent === "← Voltar aos arquivos")
+      ?.dispatch("click");
+
+    const root = findOne(container, (node) => node.dataset.studioShell === "ready");
+    expect(root?.dataset.projectFilesPane).toBe("tree");
+    expect(model.projectFiles.selectedPath).toBe(entry.path);
+    expect(handle.sandboxPreviewHost).toBe(host);
+    expect(
+      findOne(
+        container,
+        (node) => node.placeholder.startsWith("Escreva uma mensagem"),
+      )?.value,
+    ).toBe("Rascunho preservado");
   });
 
   it("mantém a aprovação habilitada somente para o dono e envia a revisão exata", () => {
@@ -647,6 +944,40 @@ function createModel(
       fields: [
         { id: "speed", label: "Velocidade", value: "120" },
       ],
+    },
+    projectFiles: {
+      state: "ready",
+      statusMessage: "2 arquivos disponíveis em modo somente leitura.",
+      files: [
+        {
+          path: "web/src/main.ts",
+          name: "main.ts",
+          category: "source",
+          kind: "text",
+          mediaType: "text/typescript",
+          sizeBytes: 42,
+          sha256: "a".repeat(64),
+        },
+        {
+          path: "docs/README.md",
+          name: "README.md",
+          category: "documentation",
+          kind: "text",
+          mediaType: "text/markdown",
+          sizeBytes: 24,
+          sha256: "b".repeat(64),
+        },
+      ],
+      selectedPath: null,
+      contentState: "idle",
+      contentMessage: "Selecione um arquivo para visualizar seu conteúdo.",
+      selectedContent: null,
+    },
+    invite: {
+      state: "idle",
+      statusMessage: "Crie um link de uso único para seu amigo.",
+      shareUrl: null,
+      expiresAtLabel: null,
     },
     chat: {
       channelId: "proposal-1",
