@@ -61,6 +61,8 @@ async function main() {
     tunnel,
     tunnelConnection.diagnostic,
   );
+  console.log("Conexão HTTPS pronta. Aguardando o DNS público chegar aos outros aparelhos...");
+  await waitForPublicDnsPropagation(new URL(publicUrl).hostname, tunnel);
 
   if (process.argv.includes("--verify-only")) {
     console.log(`\nTúnel público verificado em ${publicUrl}`);
@@ -673,53 +675,71 @@ async function waitForPublicStudio(publicUrl, pagesOrigin, tunnel, tunnelDiagnos
   );
 }
 
-async function requestPublicHealth(url, pagesOrigin) {
+export async function requestPublicHealth(url, pagesOrigin, dependencies = {}) {
+  const resolveAddress = dependencies.resolveAddress ?? resolvePublicAddressWithDoh;
+  const requestAtAddress = dependencies.requestAtAddress ?? requestPublicHealthAtAddress;
+  const hostname = new URL(url).hostname;
+  const address = await resolveAddress(hostname);
   try {
-    const response = await fetch(url, {
-      headers: { Accept: "application/json", Origin: pagesOrigin },
-      signal: AbortSignal.timeout(4_000),
-    });
-    return {
-      status: response.status,
-      payload: await response.json(),
-      allowOrigin: response.headers.get("access-control-allow-origin"),
-      allowCredentials: response.headers.get("access-control-allow-credentials"),
-    };
-  } catch (directError) {
-    const hostname = new URL(url).hostname;
-    const address = await resolvePublicAddressWithDoh(hostname);
-    try {
-      return await requestPublicHealthAtAddress(url, pagesOrigin, address);
-    } catch (dohError) {
-      throw new Error(
-        `${networkErrorMessage(directError)}; fallback DoH: ${networkErrorMessage(dohError)}`,
-      );
-    }
+    return await requestAtAddress(url, pagesOrigin, address);
+  } catch (error) {
+    throw new Error(`HTTPS via DNS seguro: ${networkErrorMessage(error)}`);
   }
 }
 
-export async function resolvePublicAddressWithDoh(hostname, fetchImplementation = fetch) {
-  const resolverUrls = [
-    "https://cloudflare-dns.com/dns-query",
-    "https://dns.google/resolve",
-  ];
-  const attempts = resolverUrls.map(async (resolverUrl) => {
-    const url = new URL(resolverUrl);
-    url.searchParams.set("name", hostname);
-    url.searchParams.set("type", "A");
-    const response = await fetchImplementation(url, {
-      headers: { Accept: "application/dns-json" },
-      signal: AbortSignal.timeout(4_000),
-    });
-    if (!response.ok) throw new Error(`DNS-over-HTTPS respondeu HTTP ${response.status}`);
-    return addressFromDohResponse(await response.json());
+const publicDohResolverUrls = [
+  "https://cloudflare-dns.com/dns-query",
+  "https://dns.google/resolve",
+];
+
+async function requestPublicAddressFromDoh(resolverUrl, hostname, fetchImplementation) {
+  const url = new URL(resolverUrl);
+  url.searchParams.set("name", hostname);
+  url.searchParams.set("type", "A");
+  const response = await fetchImplementation(url, {
+    headers: { Accept: "application/dns-json" },
+    signal: AbortSignal.timeout(4_000),
   });
+  if (!response.ok) throw new Error(`DNS-over-HTTPS respondeu HTTP ${response.status}`);
+  return addressFromDohResponse(await response.json());
+}
+
+export async function resolvePublicAddressWithDoh(hostname, fetchImplementation = fetch) {
+  const attempts = publicDohResolverUrls.map((resolverUrl) =>
+    requestPublicAddressFromDoh(resolverUrl, hostname, fetchImplementation)
+  );
 
   try {
     return await Promise.any(attempts);
   } catch {
     throw new Error("DNS-over-HTTPS não confirmou o endereço do túnel em nenhum resolvedor");
   }
+}
+
+export async function resolvePublicAddressesWithDoh(hostname, fetchImplementation = fetch) {
+  return await Promise.all(
+    publicDohResolverUrls.map((resolverUrl) =>
+      requestPublicAddressFromDoh(resolverUrl, hostname, fetchImplementation)
+    ),
+  );
+}
+
+async function waitForPublicDnsPropagation(hostname, tunnel) {
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    if (tunnel.exitCode !== null || tunnel.signalCode !== null) {
+      throw new Error("o túnel encerrou durante a propagação do DNS público");
+    }
+    try {
+      await resolvePublicAddressesWithDoh(hostname);
+      return;
+    } catch {
+      await delay(750);
+    }
+  }
+  throw new Error(
+    "o endereço do túnel não se propagou em dois resolvedores públicos dentro de 3 minutos",
+  );
 }
 
 export function addressFromDohResponse(payload) {

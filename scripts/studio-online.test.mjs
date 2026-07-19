@@ -12,7 +12,9 @@ import {
   loopbackServerUrl,
   networkErrorMessage,
   parseStudioHealth,
+  requestPublicHealth,
   resolvePublicAddressWithDoh,
+  resolvePublicAddressesWithDoh,
   studioNodeArguments,
   studioPortFromEnv,
   studioRuntimeConfigFromEnv,
@@ -244,6 +246,35 @@ test("erro de rede preserva código útil sem repetir URL pública", () => {
   assert.doesNotMatch(message, /private\.example/);
 });
 
+test("health público evita DNS local antes da propagação do Quick Tunnel", async () => {
+  const calls = [];
+  const response = await requestPublicHealth(
+    "https://new-tunnel.trycloudflare.com/health",
+    "https://icaropv01.github.io",
+    {
+      async resolveAddress(hostname) {
+        calls.push(["doh", hostname]);
+        return "104.16.230.132";
+      },
+      async requestAtAddress(url, origin, address) {
+        calls.push(["https", url, origin, address]);
+        return { status: 200, payload: { status: "ok" } };
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [
+    ["doh", "new-tunnel.trycloudflare.com"],
+    [
+      "https",
+      "https://new-tunnel.trycloudflare.com/health",
+      "https://icaropv01.github.io",
+      "104.16.230.132",
+    ],
+  ]);
+});
+
 test("fallback DoH aceita somente resposta IPv4 válida", () => {
   assert.equal(
     addressFromDohResponse({
@@ -288,6 +319,33 @@ test("fallback DoH usa resolvedores independentes durante a propagação do Quic
       ["https://cloudflare-dns.com", "new-tunnel.trycloudflare.com", "A"],
       ["https://dns.google", "new-tunnel.trycloudflare.com", "A"],
     ],
+  );
+});
+
+test("convite aguarda os dois resolvedores públicos confirmarem o hostname", async () => {
+  const positiveFetch = async (url) => new Response(JSON.stringify({
+    Status: 0,
+    Answer: [{ type: 1, data: url.hostname === "dns.google" ? "104.16.231.132" : "104.16.230.132" }],
+  }), {
+    status: 200,
+    headers: { "content-type": "application/dns-json" },
+  });
+  assert.deepEqual(
+    await resolvePublicAddressesWithDoh("ready.trycloudflare.com", positiveFetch),
+    ["104.16.230.132", "104.16.231.132"],
+  );
+
+  const partiallyPropagatedFetch = async (url) => new Response(JSON.stringify(
+    url.hostname === "dns.google"
+      ? { Status: 3, Answer: [] }
+      : { Status: 0, Answer: [{ type: 1, data: "104.16.230.132" }] },
+  ), {
+    status: 200,
+    headers: { "content-type": "application/dns-json" },
+  });
+  await assert.rejects(
+    resolvePublicAddressesWithDoh("partial.trycloudflare.com", partiallyPropagatedFetch),
+    /não confirmou/,
   );
 });
 

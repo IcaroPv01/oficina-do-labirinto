@@ -47,6 +47,11 @@ do DNS do túnel. A URL pública entra no link do Pages como dado não secreto; 
 token descartável fica somente no fragmento. Depois do login, o dono usa
 **Convidar amigo** e o celular recebe o mesmo fluxo com papel de coautor.
 
+Durante a criação do Quick Tunnel, o health público é consultado por DoH e
+HTTPS com SNI, sem semear `NXDOMAIN` no DNS local antes do registro existir. O
+convite só é liberado quando Cloudflare e Google Public DNS confirmam o novo
+hostname; essa espera pode levar até três minutos na primeira abertura.
+
 O Quick Tunnel atende ao MVP de duas pessoas, mas é deliberadamente temporário
 e muda de endereço a cada execução. A instalação definitiva usa um túnel
 nomeado com hostname estável e serviço automático, conforme R-205. Nenhuma das

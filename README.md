@@ -83,7 +83,9 @@ O iniciador:
    navegador ou ao processo do túnel;
 2. baixa na primeira execução um `cloudflared` oficial e confere seu SHA-256;
 3. abre um túnel HTTPS temporário sem expor portas do roteador;
-4. confirma servidor, versão, CORS e IA antes de criar o convite;
+4. confirma servidor, versão, CORS, IA e propagação em dois resolvedores DNS
+   públicos antes de criar o convite — o primeiro início pode levar até três
+   minutos;
 5. abre a UI local do proprietário e prepara nela o link público do GitHub
    Pages para o amigo.
 
